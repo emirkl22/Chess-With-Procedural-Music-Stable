@@ -38,6 +38,9 @@ namespace Chess
         // ---- Audio tracking ----
         float _prevWinRate = 0.5f;
 
+        // ---- Ply counter (incremented after every half-move) ----
+        int _plyNumber = 0;
+
         // ---- Components ----
         BoardRenderer       _boardRenderer;
         PieceVisualManager  _pieceVisuals;
@@ -49,6 +52,10 @@ namespace Chess
         // -----------------------------------------------------------------------
         void Awake()
         {
+            // Board rendering uses absolute world coords — GameManager must be at origin.
+            transform.position = Vector3.zero;
+            transform.rotation = Quaternion.identity;
+
             _board = new BoardState();
             SetupCamera();
             SetupBoard();
@@ -60,6 +67,7 @@ namespace Chess
         {
             _pieceVisuals.Refresh(_board);
             _ui.SetTurn(PieceColor.White);
+            RefreshMetricsPanel();   // show neutral defaults before first move
         }
 
         // -----------------------------------------------------------------------
@@ -67,6 +75,7 @@ namespace Chess
         // -----------------------------------------------------------------------
         public void OnSquareClicked(int row, int col)
         {
+            Debug.Log($"[GameManager] Kare tıklandı: row={row} col={col}  phase={_phase}  piece={_board.Board[row, col]}");
             if (_phase == GamePhase.AIThinking || _phase == GamePhase.GameOver) return;
 
             if (_phase == GamePhase.WaitingForInput)
@@ -104,7 +113,16 @@ namespace Chess
         void TrySelectPiece(int row, int col)
         {
             int piece = _board.Board[row, col];
-            if (piece == Piece.None || Piece.GetColor(piece) != PieceColor.White) return;
+            if (piece == Piece.None)
+            {
+                Debug.Log($"[TrySelect] row={row} col={col} → boş kare, seçilecek taş yok.");
+                return;
+            }
+            if (Piece.GetColor(piece) != PieceColor.White)
+            {
+                Debug.Log($"[TrySelect] row={row} col={col} → siyah taş ({piece}), sadece beyaz taşlar seçilebilir.");
+                return;
+            }
 
             // Compute legal moves for this piece
             _selectedMoves.Clear();
@@ -126,6 +144,10 @@ namespace Chess
             _highlights.Clear();
             _highlights.ShowLastMove(move);
             _pieceVisuals.Refresh(_board);
+
+            // Update metrics after White's move (audio values stay from last AI move)
+            _plyNumber++;
+            RefreshMetricsPanel();
 
             if (CheckGameOver(PieceColor.Black)) return;
 
@@ -154,8 +176,11 @@ namespace Chess
                     _pieceVisuals.Refresh(_board);
 
                     _ui.SetAIThinking(false);
-                    _ui.SetEvalInfo(winRate, delta, visits);
-                    _audio.OnMovePlayed(winRate, delta, visits);
+                    _audio.OnMovePlayed(winRate, delta, visits); // updates AudioBridge properties first
+
+                    // Update ply counter and refresh the full metrics panel
+                    _plyNumber++;
+                    RefreshMetricsPanel();
 
                     if (!CheckGameOver(PieceColor.White))
                     {
@@ -231,13 +256,13 @@ namespace Chess
 
         void SetupComponents()
         {
-            // Selection manager lives on the camera
             var cam = Camera.main;
-            if (cam != null)
-            {
-                var sel = cam.gameObject.AddComponent<SelectionManager>();
-                sel.Init(this);
-            }
+            if (cam == null)
+                Debug.LogError("[GameManager] Camera.main bulunamadı! Sahnede 'MainCamera' tag'li bir kamera olduğundan emin ol.");
+
+            // SelectionManager artık GameManager'ın kendi GO'sunda, kamera referansını parametre olarak alıyor
+            var sel = gameObject.AddComponent<SelectionManager>();
+            sel.Init(this, cam);
 
             // MCTS agent
             _mcts = gameObject.AddComponent<MCTSAgent>();
@@ -245,6 +270,59 @@ namespace Chess
 
             // Audio bridge
             _audio = gameObject.AddComponent<AudioBridge>();
+        }
+
+        // -----------------------------------------------------------------------
+        // Metrics panel helpers
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Gather board + audio metrics and push them to UIManager.RefreshMetrics().
+        /// Safe to call at any time; AudioBridge properties default to neutral values
+        /// before the first AI move.
+        /// </summary>
+        void RefreshMetricsPanel()
+        {
+            int  mat     = BoardEvaluator.Evaluate(_board);
+            var  moves   = MoveGenerator.GetLegalMoves(_board);
+            bool inCheck = MoveGenerator.IsInCheck(_board, _board.CurrentTurn);
+
+            _ui.RefreshMetrics(
+                _audio.SmoothQ,
+                _audio.SmoothDQ,
+                _audio.LastC,
+                _audio.Harmony,
+                _audio.Jingle,
+                mat,
+                moves.Count,
+                inCheck,
+                _plyNumber,
+                ComputePhase(),
+                _mcts != null ? _mcts.LastVisitCount : 0);
+        }
+
+        /// <summary>
+        /// Heuristic game-phase label used by the metrics panel and music engine.
+        ///   OPENING  : fewer than 10 half-moves played AND 28+ pieces remain
+        ///   ENDGAME  : no queens on the board OR 14 or fewer pieces remain
+        ///   MIDGAME  : everything else
+        /// </summary>
+        string ComputePhase()
+        {
+            int  pieces    = 0;
+            bool hasQueens = false;
+            for (int r = 0; r < 8; r++)
+                for (int c = 0; c < 8; c++)
+                {
+                    int p = _board.Board[r, c];
+                    if (p == Piece.None) continue;
+                    pieces++;
+                    if (Piece.GetType(p) == Piece.Queen) hasQueens = true;
+                }
+
+            if (_plyNumber < 10 && pieces >= 28) return "OPENING";
+            if (!hasQueens || pieces <= 14)       return "ENDGAME";
+            return "MIDGAME";
         }
     }
 }

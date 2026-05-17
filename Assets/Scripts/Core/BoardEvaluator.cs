@@ -92,13 +92,80 @@ namespace Chess
 
                     var color = Piece.GetColor(piece);
                     int type  = Piece.GetType(piece);
-                    int mat   = PieceValues[type];
-                    int pst   = GetPST(type, r, c, color);
                     int sign  = color == PieceColor.White ? 1 : -1;
 
-                    score += sign * (mat + pst);
+                    score += sign * (PieceValues[type] + GetPST(type, r, c, color));
                 }
+
+            score += KingTropism(state, PieceColor.White) - KingTropism(state, PieceColor.Black);
+            score -= KingSafety(state, PieceColor.White);
+            score += KingSafety(state, PieceColor.Black);
+
             return score;
+        }
+
+        // Bonus for having pieces close to the opponent's king (encourages attacking).
+        // Each non-pawn, non-king piece earns (7 - Chebyshev_distance) * 5 cp.
+        static int KingTropism(BoardState state, PieceColor attacker)
+        {
+            PieceColor defender = Piece.Opposite(attacker);
+            int kingRow = -1, kingCol = -1;
+            for (int r = 0; r < 8; r++)
+                for (int c = 0; c < 8; c++)
+                {
+                    int p = state.Board[r, c];
+                    if (p != Piece.None && Piece.GetColor(p) == defender && Piece.GetType(p) == Piece.King)
+                    { kingRow = r; kingCol = c; }
+                }
+            if (kingRow < 0) return 0;
+
+            int bonus = 0;
+            for (int r = 0; r < 8; r++)
+                for (int c = 0; c < 8; c++)
+                {
+                    int p = state.Board[r, c];
+                    if (p == Piece.None || Piece.GetColor(p) != attacker) continue;
+                    int type = Piece.GetType(p);
+                    if (type == Piece.Pawn || type == Piece.King) continue;
+                    int dr = r - kingRow; if (dr < 0) dr = -dr;
+                    int dc = c - kingCol; if (dc < 0) dc = -dc;
+                    int dist = dr > dc ? dr : dc;
+                    bonus += (7 - dist) * 5;
+                }
+            return bonus;
+        }
+
+        // Penalty (positive = bad) for an unsafe king:
+        //   +40 if king on central files (cols 2-5, not yet castled)
+        //   +20 per missing pawn in the adjacent shield row
+        static int KingSafety(BoardState state, PieceColor color)
+        {
+            int kingRow = -1, kingCol = -1;
+            for (int r = 0; r < 8; r++)
+                for (int c = 0; c < 8; c++)
+                {
+                    int p = state.Board[r, c];
+                    if (p != Piece.None && Piece.GetColor(p) == color && Piece.GetType(p) == Piece.King)
+                    { kingRow = r; kingCol = c; }
+                }
+            if (kingRow < 0) return 0;
+
+            int penalty = 0;
+            if (kingCol >= 2 && kingCol <= 5) penalty += 40;
+
+            int shieldRow = color == PieceColor.White ? kingRow + 1 : kingRow - 1;
+            if (shieldRow >= 0 && shieldRow < 8)
+            {
+                for (int dc = -1; dc <= 1; dc++)
+                {
+                    int sc = kingCol + dc;
+                    if (sc < 0 || sc >= 8) continue;
+                    int p = state.Board[shieldRow, sc];
+                    bool hasPawn = p != Piece.None && Piece.GetColor(p) == color && Piece.GetType(p) == Piece.Pawn;
+                    if (!hasPawn) penalty += 20;
+                }
+            }
+            return penalty;
         }
 
         static int GetPST(int type, int row, int col, PieceColor color)

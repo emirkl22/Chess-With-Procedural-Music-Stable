@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6492beb9a17427d4e88c1bf86a8e223f, type: 3}
+  m_Name: PieceDatabase
+  m_EditorClassIdentifier: Assembly-CSharp::Chess.PieceDatabase
+  whitePawn: {fileID: 9194865911577458698, guid: 71d9182c3238f824797f5be0174ad13b, type: 3}
+  whiteKnight: {fileID: -7487531809122567963, guid: 2fcf949062d1b4249b12c4e48518d43c, type: 3}
+  whiteBishop: {fileID: 2030456140538919498, guid: cce18467f11060f45b3d03bbd07a2918, type: 3}
+  whiteRook: {fileID: 2366578684743085616, guid: 8a7e278e4f46bd24491684ee400e71ec, type: 3}
+  whiteQueen: {fileID: -5990683896311285210, guid: 21d5690bd8d80384eba267903d498daa, type: 3}
+  whiteKing: {fileID: -6512226606905405871, guid: bb3a004920f526f44826031b9d2cd908, type: 3}
+  blackPawn: {fileID: 5479996838431968346, guid: 8fa37d2ee12dbf840a5fe86eb7fc658c, type: 3}
+  blackKnight: {fileID: -936249843164803462, guid: a6f80d9419974cc4896704515faee879, type: 3}
+  blackBishop: {fileID: 4485300514341696304, guid: f8ec49549e8e01640a9c66fdc884510e, type: 3}
+  blackRook: {fileID: -6442041118641851461, guid: baa4b1937d3e3dd4997002f1e8f9a1c0, type: 3}
+  blackQueen: {fileID: -752838289848987854, guid: f043d5625d8b87e45a56db2c83b045a3, type: 3}
+  blackKing: {fileID: 7186656541719271990, guid: 509aaab13f0e4d045858b9b843c0fb83, type: 3}

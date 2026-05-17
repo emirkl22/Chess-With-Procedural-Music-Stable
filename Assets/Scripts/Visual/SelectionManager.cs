@@ -1,27 +1,39 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace Chess
 {
     // Reads mouse input and forwards board-square clicks to GameManager.
-    [RequireComponent(typeof(Camera))]
     public class SelectionManager : MonoBehaviour
     {
         GameManager _gm;
         Camera      _cam;
 
-        public void Init(GameManager gm)
+        public void Init(GameManager gm, Camera cam)
         {
             _gm  = gm;
-            _cam = GetComponent<Camera>();
+            _cam = cam;
         }
 
         void Update()
         {
-            if (!Input.GetMouseButtonDown(0)) return;
+            if (_gm == null || _cam == null) return;
 
-            Vector3 world = _cam.ScreenToWorldPoint(Input.mousePosition);
+            var mouse = Mouse.current;
+            if (mouse == null || !mouse.leftButton.wasPressedThisFrame) return;
+
+            Vector2 screenPos = mouse.position.ReadValue();
+
+            // For orthographic camera: z = distance from camera to the world plane (board is at z=0)
+            float depth = Mathf.Abs(_cam.transform.position.z);
+            Vector3 world = _cam.ScreenToWorldPoint(new Vector3(screenPos.x, screenPos.y, depth));
+
+            Debug.Log($"[Click] screen={screenPos}  world=({world.x:F2},{world.y:F2})");
+
             if (BoardRenderer.WorldToBoard(world, out int row, out int col))
                 _gm.OnSquareClicked(row, col);
+            else
+                Debug.Log("[Click] Board dışına tıklandı.");
         }
     }
 }

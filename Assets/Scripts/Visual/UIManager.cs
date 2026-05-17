@@ -2,57 +2,234 @@ using UnityEngine;
 
 namespace Chess
 {
-    // In-world TextMesh UI: turn indicator, game-over message, AI status.
-    // Positioned above the board (y > 8).
+    /// <summary>
+    /// In-world TextMesh UI -- two zones:
+    ///   * Top bar    (above board, y > 8)   : turn indicator + status line
+    ///   * Right panel (right of board, x>8.8): real-time audio metrics panel
+    ///
+    /// All strings are ASCII-safe (Unity default Arial font).
+    /// Per-row colours are updated every half-move via RefreshMetrics().
+    /// </summary>
     public class UIManager : MonoBehaviour
     {
+        // ---- Top bar -----------------------------------------------------
         TextMesh _turnLabel;
         TextMesh _statusLabel;
-        TextMesh _evalLabel;
 
+        // ---- Right-side metrics panel ------------------------------------
+        TextMesh _pTitle;       // "[ AUDIO ENGINE ]"
+        TextMesh _pSecBg;       // "-- BACKGROUND MUSIC --"
+        TextMesh _pQ;           // "Q    0.730   [######--]"
+        TextMesh _pC;           // "C    3.81    [####----]"
+        TextMesh _pHarmony;     // "Harmony  MAJOR"
+        TextMesh _pSecMove;     // "-- LAST MOVE --"
+        TextMesh _pDQ;          // "dQ  +0.086  POSITIVE [+]"
+        TextMesh _pSecState;    // "-- BOARD STATE --"
+        TextMesh _pMaterial;    // "Material  +120 cp"
+        TextMesh _pPhase;       // "Phase    OPENING"
+        TextMesh _pLegal;       // "Mobility  28 moves"
+        TextMesh _pSims;        // "Sims     1500"
+        TextMesh _pCheck;       // "Check    ok"  OR  "Check    (!)"
+        TextMesh _pPly;         // "Ply      #12"
+
+        // Panel left-edge x  (board tiles occupy x in [−0.5 , 7.5])
+        const float PX    = 9.8f;
+        const float SCALE = 0.082f;
+
+        // =================================================================
+        // Build
+        // =================================================================
         public void Build()
         {
-            _turnLabel   = CreateLabel("TurnLabel",   new Vector3(4f, 8.6f, 0f), 24, Color.white);
-            _statusLabel = CreateLabel("StatusLabel", new Vector3(4f, 9.1f, 0f), 20, Color.yellow);
-            _evalLabel   = CreateLabel("EvalLabel",   new Vector3(4f, 8.1f, 0f), 16, new Color(0.8f,0.8f,0.8f));
+            // Top bar (centered above the board)
+            _turnLabel   = MkLabel("TurnLabel",   new Vector3(4f, 8.75f, 0f), 22, Color.white);
+            _statusLabel = MkLabel("StatusLabel", new Vector3(4f, 9.25f, 0f), 18, Color.yellow);
+
+            // Panel rows, stepping y downward
+            Color gray   = new Color(0.48f, 0.48f, 0.48f);
+            Color accent = new Color(0.85f, 0.82f, 1.00f);
+
+            float y = 8.25f;
+            _pTitle    = PRow("PTitle",    ref y, 0.00f, 16, accent);
+            _pSecBg    = PRow("PSecBg",    ref y, 0.44f, 12, gray);
+            _pQ        = PRow("PQ",        ref y, 0.37f, 14, Color.white);
+            _pC        = PRow("PC",        ref y, 0.40f, 14, Color.white);
+            _pHarmony  = PRow("PHarmony",  ref y, 0.40f, 14, Color.white);
+            _pSecMove  = PRow("PSecMove",  ref y, 0.48f, 12, gray);
+            _pDQ       = PRow("PDQ",       ref y, 0.37f, 14, Color.white);
+            _pSecState = PRow("PSecState", ref y, 0.48f, 12, gray);
+            _pMaterial = PRow("PMaterial", ref y, 0.37f, 14, Color.white);
+            _pPhase    = PRow("PPhase",    ref y, 0.40f, 14, Color.white);
+            _pLegal    = PRow("PLegal",    ref y, 0.40f, 14, Color.white);
+            _pSims     = PRow("PSims",     ref y, 0.40f, 14, Color.white);
+            _pCheck    = PRow("PCheck",    ref y, 0.40f, 14, Color.white);
+            _pPly      = PRow("PPly",      ref y, 0.40f, 14, Color.white);
+
+            // Static header strings
+            _pTitle.text    = "[ AUDIO ENGINE ]";
+            _pSecBg.text    = "-- BACKGROUND MUSIC --";
+            _pSecMove.text  = "-- LAST MOVE --";
+            _pSecState.text = "-- BOARD STATE --";
+
+            // Neutral initial values (shown before first AI move)
+            RefreshMetrics(0.5f, 0f, 0f, "Neutral", "neutral", 0, 20, false, 0, "OPENING", 0);
         }
 
-        public void SetTurn(PieceColor turn) =>
-            SetText(_turnLabel, turn == PieceColor.White ? "White's turn" : "Black's turn (AI thinking…)");
-
-        public void SetAIThinking(bool thinking) =>
-            SetText(_statusLabel, thinking ? "AI is thinking…" : "");
-
-        public void SetGameOver(string result) =>
-            SetText(_statusLabel, result);
-
-        public void SetEvalInfo(float winRate, float delta, int visits)
+        // Creates a row at the current y, then decrements y by stepDown.
+        TextMesh PRow(string name, ref float y, float stepDown, int fontSize, Color color)
         {
-            string harmony = winRate > 0.6f ? "Major" : winRate < 0.4f ? "Minor" : "Neutral";
-            SetText(_evalLabel, $"Q={winRate:F2}  ΔQ={delta:+0.00;-0.00}  N={visits}  [{harmony}]");
+            y -= stepDown;
+            return MkLabel(name, new Vector3(PX, y, 0f), fontSize, color);
         }
+
+        // =================================================================
+        // Top-bar API
+        // =================================================================
+
+        public void SetTurn(PieceColor turn)
+        {
+            SetText(_turnLabel,
+                turn == PieceColor.White ? "Your turn  (White)" : "AI thinking...  (Black)");
+        }
+
+        public void SetAIThinking(bool thinking)
+        {
+            SetText(_statusLabel, thinking ? "> Computing..." : "");
+        }
+
+        public void SetGameOver(string result)
+        {
+            SetText(_statusLabel, result);
+        }
+
+        // =================================================================
+        // Metrics panel API
+        // =================================================================
+
+        /// <summary>
+        /// Refresh every value row of the audio-metrics panel.
+        /// Called after each half-move (player or AI).
+        ///
+        /// q          -- Smoothed MCTS win-rate [0,1] (from AudioBridge.SmoothQ)
+        /// dq         -- Smoothed delta ΔQ      (from AudioBridge.SmoothDQ)
+        /// c          -- Confidence log(N+1)    (from AudioBridge.LastC)
+        /// harmony    -- "Major" / "Neutral" / "Minor"
+        /// jingle     -- "positive" / "neutral" / "negative"
+        /// materialCp -- Static board eval in centipawns (+ = White advantage)
+        /// legalMoves -- Legal move count for the side to move next
+        /// inCheck    -- Is the side to move currently in check?
+        /// plyNumber  -- Half-move counter (0 = game start)
+        /// gamePhase  -- "OPENING" / "MIDGAME" / "ENDGAME"
+        /// simCount   -- MCTS simulation count for the last AI move
+        /// </summary>
+        public void RefreshMetrics(
+            float  q,           float  dq,          float  c,
+            string harmony,     string jingle,
+            int    materialCp,  int    legalMoves,   bool   inCheck,
+            int    plyNumber,   string gamePhase,    int    simCount)
+        {
+            // -- Win rate (Q) -----------------------------------------------
+            _pQ.color = QColor(q);
+            _pQ.text  = string.Format("Q    {0:F3}   {1}", q, Bar(q));
+
+            // -- Confidence (C) ---------------------------------------------
+            float cNorm = Mathf.Clamp01(c / 7.5f);
+            _pC.color = Color.Lerp(new Color(0.50f, 0.65f, 1.00f),
+                                   new Color(1.00f, 1.00f, 0.40f), cNorm);
+            _pC.text  = string.Format("C    {0:F2}    {1}", c, Bar(cNorm));
+
+            // -- Harmony ---------------------------------------------------
+            _pHarmony.color = HarmonyColor(harmony);
+            _pHarmony.text  = "Harmony  " + (harmony ?? "Neutral").ToUpper();
+
+            // -- Delta + jingle --------------------------------------------
+            string tag = dq >  0.05f ? "[+]"
+                       : dq < -0.05f ? "[-]"
+                       :               "[=]";
+            _pDQ.color = DeltaColor(dq);
+            _pDQ.text  = string.Format("dQ   {0:+0.000;-0.000}  {1} {2}",
+                                       dq, (jingle ?? "neutral").ToUpper(), tag);
+
+            // -- Material balance ------------------------------------------
+            _pMaterial.color = materialCp >  25 ? new Color(0.25f, 1.00f, 0.38f) :
+                               materialCp < -25 ? new Color(1.00f, 0.28f, 0.28f) :
+                                                  new Color(0.72f, 0.72f, 0.72f);
+            _pMaterial.text  = "Material  " + (materialCp >= 0 ? "+" : "") + materialCp + " cp";
+
+            // -- Game phase ------------------------------------------------
+            _pPhase.color = gamePhase == "OPENING" ? new Color(0.35f, 0.90f, 1.00f) :
+                            gamePhase == "ENDGAME" ? new Color(0.85f, 0.45f, 1.00f) :
+                                                     new Color(1.00f, 0.85f, 0.30f);
+            _pPhase.text  = "Phase    " + gamePhase;
+
+            // -- Mobility (legal moves) ------------------------------------
+            _pLegal.color = legalMoves >= 25 ? new Color(0.30f, 1.00f, 0.42f) :
+                            legalMoves <= 10 ? new Color(1.00f, 0.42f, 0.30f) :
+                                               Color.white;
+            _pLegal.text  = "Mobility  " + legalMoves + " moves";
+
+            // -- MCTS simulations ------------------------------------------
+            _pSims.color = new Color(0.55f, 0.65f, 1.00f);
+            _pSims.text  = simCount > 0 ? "Sims     " + simCount : "Sims     --";
+
+            // -- Check indicator -------------------------------------------
+            _pCheck.color = inCheck ? new Color(1.00f, 0.20f, 0.20f)
+                                    : new Color(0.36f, 0.36f, 0.36f);
+            _pCheck.text  = inCheck ? "Check    (!)" : "Check    ok";
+
+            // -- Ply counter -----------------------------------------------
+            _pPly.color = new Color(0.50f, 0.50f, 0.50f);
+            _pPly.text  = "Ply      #" + plyNumber;
+        }
+
+        // =================================================================
+        // Helpers
+        // =================================================================
+
+        // 8-character ASCII progress bar, e.g. [######--]
+        static string Bar(float t, int w = 8)
+        {
+            int n = Mathf.RoundToInt(Mathf.Clamp01(t) * w);
+            return "[" + new string('#', n) + new string('-', w - n) + "]";
+        }
+
+        static Color QColor(float q) =>
+            q > 0.62f ? new Color(0.20f, 1.00f, 0.35f) :   // White winning  -> green
+            q < 0.38f ? new Color(1.00f, 0.25f, 0.25f) :   // Black winning  -> red
+                        new Color(0.90f, 0.88f, 0.28f);     // Balanced       -> yellow
+
+        static Color HarmonyColor(string h)
+        {
+            if (h == "Major") return new Color(0.20f, 1.00f, 0.35f);   // green
+            if (h == "Minor") return new Color(0.85f, 0.30f, 0.95f);   // purple
+            return new Color(0.70f, 0.70f, 0.70f);                      // gray (Neutral)
+        }
+
+        static Color DeltaColor(float dq) =>
+            dq >  0.05f ? new Color(0.20f, 1.00f, 0.32f) :  // positive -> green
+            dq < -0.05f ? new Color(1.00f, 0.25f, 0.25f) :  // negative -> red
+                          new Color(0.62f, 0.62f, 0.62f);    // neutral  -> gray
 
         void SetText(TextMesh tm, string text)
         {
             if (tm != null) tm.text = text;
         }
 
-        TextMesh CreateLabel(string name, Vector3 pos, int fontSize, Color color)
+        TextMesh MkLabel(string goName, Vector3 pos, int fontSize, Color color)
         {
-            var go = new GameObject(name);
+            var go = new GameObject(goName);
             go.transform.SetParent(transform, false);
             go.transform.position   = pos;
-            go.transform.localScale = Vector3.one * 0.12f;
+            go.transform.localScale = Vector3.one * SCALE;
 
-            var tm          = go.AddComponent<TextMesh>();
-            tm.fontSize     = fontSize;
-            tm.alignment    = TextAlignment.Center;
-            tm.anchor       = TextAnchor.MiddleCenter;
-            tm.color        = color;
+            var tm       = go.AddComponent<TextMesh>();
+            tm.fontSize  = fontSize;
+            tm.alignment = TextAlignment.Left;
+            tm.anchor    = TextAnchor.MiddleLeft;
+            tm.color     = color;
 
             var mr = go.GetComponent<MeshRenderer>();
             if (mr != null) mr.sortingOrder = 5;
-
             return tm;
         }
     }
