@@ -170,7 +170,7 @@ SynthDef(\bgCluster, { |out=0, freq=60, amp=0.08, q=0.5, c=3, gate=1|
     var spread = q.linlin(0, 1, 0.28, 0.025);
     env = EnvGen.kr(Env.asr(7, 1, 9), gate, doneAction: 2);
     sig = Mix.fill(9, { |i|
-        var detune = LFNoise2.kr(0.04 + (i * 0.014)).range(-spread, spread);
+        var detune = LFNoise2.kr(0.04 + (i * 0.014)).range(spread.neg, spread);
         SinOsc.ar(freq * (1 + detune), 0, 1.0 / 9)
     });
     sig = FreeVerb.ar(sig * env * amp, 0.82, 0.94);
