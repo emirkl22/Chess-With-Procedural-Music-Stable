@@ -145,8 +145,10 @@ namespace Chess
             _highlights.ShowLastMove(move);
             _pieceVisuals.Refresh(_board);
 
-            // Update metrics after White's move (audio values stay from last AI move)
             _plyNumber++;
+            // Notify SC immediately: background re-registers the move and a
+            // neutral marker jingle fires before the AI responds.
+            _audio.OnPlayerMove();
             RefreshMetricsPanel();
 
             if (CheckGameOver(PieceColor.Black)) return;

@@ -360,20 +360,23 @@ s.sync;
 // 5. VOICE MANAGER
 // ============================================================================
 
-// 8 background SynthDef names
 ~bgPool = [\bgAdditive, \bgFMDrone, \bgNoise, \bgComb,
            \bgRingMod,  \bgPulse,   \bgWarp,  \bgCluster];
 
-// Biased sub-pools by game state
-// Low Q (losing) → harsh, unstable timbres
 ~harshPool  = [\bgFMDrone, \bgCluster, \bgWarp, \bgPulse, \bgNoise];
-// High Q (winning) → smooth, harmonic timbres
 ~smoothPool = [\bgAdditive, \bgComb, \bgRingMod, \bgNoise];
 
-// How many concurrent voices: 1 (low C) to 3 (high C)
+~slotAmps  = [0.18, 0.12, 0.08];
+~voices    = Array.newClear(3);
+~voiceKeys = Array.newClear(3);
+
+~lastJingleIdx = IdentityDictionary[\positive -> -1, \negative -> -1, \neutral -> -1];
+
+// Track Q at last respawn — used to decide when to do a full respawn
+~lastRespawnQ = 0.5;
+
 ~voiceCount = { |c| (c / 2.6).ceil.clip(1, 3).asInteger };
 
-// Spawn one voice into a slot; kill existing occupant first
 ~spawnVoice = { |slot, defName|
     var q, c, harm, root, freq;
     ~voices[slot] !? { |s| s.set(\gate, 0) };
@@ -381,37 +384,34 @@ s.sync;
     c    = ~state[\confidence].asFloat;
     harm = ~state[\harmony];
     root = ~roots[harm] ?? 60;
-    freq = (root + q.linlin(0, 1, -4, 4)).midicps;
+    // ±18 semitones = 1.5-octave range; losing → bass register, winning → bright
+    freq = (root + q.linlin(0, 1, -18, 12)).midicps;
     ~voices[slot]    = Synth(defName, [\freq, freq, \q, q, \c, c, \amp, ~slotAmps[slot]]);
     ~voiceKeys[slot] = defName;
-    ("+ [" ++ slot ++ "] " ++ defName).postln;
+    ("+ [" ++ slot ++ "] " ++ defName ++ "  freq=" ++ freq.round(0.1) ++ " Hz").postln;
 };
 
-// Release one slot gracefully
 ~killSlot = { |slot|
     ~voices[slot] !? { |s| s.set(\gate, 0); ~voices[slot] = nil; ~voiceKeys[slot] = nil };
 };
 
-// Send morph parameters to all live voices (no SynthDef change)
 ~morphVoices = {
     var q    = ~state[\winrate].asFloat;
     var c    = ~state[\confidence].asFloat;
     var harm = ~state[\harmony];
     var root = ~roots[harm] ?? 60;
-    var freq = (root + q.linlin(0, 1, -4, 4)).midicps;
+    var freq = (root + q.linlin(0, 1, -18, 12)).midicps;
     ~voices.doWithIndex { |v, i|
         v !? { v.set(\freq, freq, \q, q, \c, c, \amp, ~slotAmps[i]) };
     };
 };
 
-// Full voice respawn: pick N voices from a Q-biased pool, replace all slots
 ~respawnAll = {
     var q    = ~state[\winrate].asFloat;
     var c    = ~state[\confidence].asFloat;
     var n    = ~voiceCount.value(c);
     var pool;
 
-    // Bias pool by Q
     if(q < 0.38, {
         pool = (~harshPool ++ ~bgPool.reject{ |d| ~harshPool.includes(d) }).scramble;
     }, {
@@ -422,16 +422,14 @@ s.sync;
         });
     });
 
-    // Release excess slots
     (n..2).do { |i| ~killSlot.value(i) };
-
-    // Spawn n voices (picked from pool, no repeats in one respawn)
     n.do { |i| ~spawnVoice.value(i, pool[i]) };
 
-    ("Voices:" + n + "  Q=" + q.round(0.01)).postln;
+    ~lastRespawnQ = q;
+    ("RESPAWN " ++ n ++ " voices | Q=" ++ q.round(0.01)
+     ++ " harm=" ++ ~state[\harmony]).postln;
 };
 
-// Mutate exactly one random active slot — called by the mutation routine
 ~mutateOneVoice = {
     var active = (0..2).select { |i| ~voices[i].notNil };
     if(active.size > 0, {
@@ -444,7 +442,7 @@ s.sync;
 };
 
 // ============================================================================
-// 6. MELODY ENGINE  (stochastic: irregular rhythm + rotating timbres)
+// 6. MELODY ENGINE
 // ============================================================================
 ~melodyDefs   = [\mPluck, \mBell, \mFM, \mBow, \mClick];
 ~melodyDefIdx = 0;
@@ -461,27 +459,22 @@ s.sync;
             var root  = ~roots[harm] ?? 60;
             var degs  = scale.degrees;
 
-            // Tempo: scales with C and Q imbalance
             var tempo = (c / 5.2).clip(0.25, 1.9) * (1.0 + ((q - 0.5).abs * 0.9));
             var dur   = (1.0 / tempo).clip(0.10, 1.3);
-
-            // Rests: more rests when C is low (sparse, unsure)
             var restP = c.linlin(0, 8, 0.50, 0.07);
+
             if(restP.coin, {
                 dur.wait;
             }, {
-                // Chord burst: high C + low probability → sudden chord cluster
-                var burst = (c > 4.8) and: { 0.15.coin };
+                var burst  = (c > 4.8) and: { 0.15.coin };
                 var nNotes = if(burst, { rrand(2, 3) }, { 1 });
 
                 nNotes.do {
-                    // Register: high Q = upper, low Q = lower, neutral = full range
                     var octShift = if(q > 0.62,
                         { [0, 12].wchoose([0.28, 0.72]) },
                         { if(q < 0.38,
                             { [0, -12].wchoose([0.25, 0.75]) },
-                            { [-12, 0, 12].wchoose([0.2, 0.6, 0.2]) }) }
-                    );
+                            { [-12, 0, 12].wchoose([0.2, 0.6, 0.2]) }) });
                     var deg  = if(q > 0.62, { rrand(3, degs.size-1) },
                                if(q < 0.38, { rrand(0, 3) },
                                             { rrand(0, degs.size-1) }));
@@ -489,7 +482,6 @@ s.sync;
                     var freq = (root + semi + 12 + octShift).midicps;
                     var amp  = c.linlin(0, 8, 0.05, 0.14) * rrand(0.72, 1.0);
 
-                    // Randomly rotate timbre, biased toward current
                     if(0.28.coin, { ~melodyDefIdx = rrand(0, ~melodyDefs.size - 1) });
                     Synth(~melodyDefs[~melodyDefIdx % ~melodyDefs.size],
                         [\freq, freq, \amp, amp, \pan, 1.0.rand2]);
@@ -501,9 +493,9 @@ s.sync;
 };
 
 // ============================================================================
-// 7. DUCK FUNCTION  (jingle plays → background ducks → fades back)
+// 7. DUCK FUNCTION  — background drops to ~5% while jingle plays
 // ============================================================================
-~duck = { |duckAmt=0.18, holdTime=1.4, fadeTime=2.2|
+~duck = { |duckAmt=0.05, holdTime=1.4, fadeTime=2.4|
     ~voices.doWithIndex { |v, i| v !? { v.set(\amp, ~slotAmps[i] * duckAmt) } };
     Routine({
         holdTime.wait;
@@ -518,7 +510,8 @@ s.sync;
 };
 
 // ============================================================================
-// 8. JINGLE POOLS  (4 per positive/negative, 3 neutral; anti-repetition)
+// 8. JINGLE POOLS  (4 positive / 4 negative / 3 neutral — anti-repetition)
+//    Amplitudes raised ~1.8× vs. old file for maximum audibility.
 // ============================================================================
 ~jinglePools = IdentityDictionary.new;
 
@@ -529,54 +522,56 @@ s.sync;
         var available = (0..pool.size-1).reject { |i| i == last };
         var idx = available.choose;
         ~lastJingleIdx[sym] = idx;
-        ("Jingle [" ++ sym ++ "] pattern#" ++ idx).postln;
-        ~duck.value(0.18, 1.5, 2.4);
+        (">>> JINGLE [" ++ sym ++ "] #" ++ idx).postln;
+        ~duck.value(0.05, 1.5, 2.4);
         pool[idx].value;
+    }, {
+        ("!!! fireJingle: pool not found for sym=" ++ sym).postln;
     });
 };
 
-// ── POSITIVE patterns ─────────────────────────────────────────────────────────
+// ── POSITIVE ──────────────────────────────────────────────────────────────────
 ~jinglePools[\positive] = [
 
-    // P-0: Classic rising Karplus arpeggio + FM stabs
+    // P-0: Rising Karplus arpeggio + FM chord stabs
     {
         var r = ~roots[~state[\harmony]] ?? 60;
         [0, 7, 12].do { |s, i|
-            Synth(\jFMBurst, [\freq, (r+s).midicps, \amp, 0.44,
+            Synth(\jFMBurst, [\freq, (r+s).midicps, \amp, 0.78,
                               \pan, [-0.6,0,0.6][i], \idx, 3.5]);
         };
         [0, 2, 4, 7, 9, 11, 14, 16].do { |s, i|
             SystemClock.sched(i * 0.072, {
-                Synth(\jKarplusArp, [\freq, (r+s+12).midicps, \amp, 0.50,
+                Synth(\jKarplusArp, [\freq, (r+s+12).midicps, \amp, 0.85,
                                      \pan, i.linlin(0,7,-0.85,0.85)]);
                 nil
             });
         };
     },
 
-    // P-1: Bell chord explosion — simultaneous multi-octave hit
+    // P-1: Bell chord explosion — multi-octave simultaneous hit
     {
         var r = ~roots[~state[\harmony]] ?? 60;
         [0, 4, 7, 12, 16, 19].do { |s, i|
-            Synth(\jBellChord, [\freq, (r+s+12).midicps, \amp, 0.52,
+            Synth(\jBellChord, [\freq, (r+s+12).midicps, \amp, 0.88,
                                 \pan, i.linlin(0,5,-0.95,0.95)]);
         };
         SystemClock.sched(0.25, {
-            Synth(\jSineSpray, [\freq, (r+24).midicps, \amp, 0.30, \spread, 0.045]);
+            Synth(\jSineSpray, [\freq, (r+24).midicps, \amp, 0.55, \spread, 0.045]);
             nil
         });
         SystemClock.sched(0.65, {
-            Synth(\jSineSpray, [\freq, (r+31).midicps, \amp, 0.20, \spread, 0.09]);
+            Synth(\jSineSpray, [\freq, (r+31).midicps, \amp, 0.40, \spread, 0.09]);
             nil
         });
     },
 
-    // P-2: Fast FM stab cascade — each note with increasing FM index
+    // P-2: FM stab cascade — rising with increasing FM index
     {
         var r = ~roots[~state[\harmony]] ?? 60;
         [0, 3, 7, 10, 14, 17, 21].do { |s, i|
             SystemClock.sched(i * 0.055, {
-                Synth(\jFMBurst, [\freq, (r+s+12).midicps, \amp, 0.52,
+                Synth(\jFMBurst, [\freq, (r+s+12).midicps, \amp, 0.88,
                                   \pan, i.linlin(0,6,-1,1), \rise, 0.001,
                                   \fall, 2.0, \idx, 3.0+(i*0.7)]);
                 nil
@@ -584,65 +579,66 @@ s.sync;
         };
     },
 
-    // P-3: Rhythmic noise burst + sine shimmer (unexpected energy)
+    // P-3: Rhythmic noise burst + shimmer
     {
         var r = ~roots[~state[\harmony]] ?? 60;
         [0, 7, 12].do { |s, i|
-            Synth(\jRhythmBurst, [\freq, (r+s+12).midicps, \amp, 0.45,
+            Synth(\jRhythmBurst, [\freq, (r+s+12).midicps, \amp, 0.80,
                                    \pan, [-0.5,0,0.5][i]]);
         };
         SystemClock.sched(0.4, {
             [0, 4, 7, 12].do { |s, i|
-                Synth(\jBellChord, [\freq, (r+s+19).midicps, \amp, 0.38,
+                Synth(\jBellChord, [\freq, (r+s+19).midicps, \amp, 0.68,
                                     \pan, i.linlin(0,3,-0.7,0.7)]);
             };
             nil
         });
         SystemClock.sched(0.8, {
-            Synth(\jSineSpray, [\freq, (r+28).midicps, \amp, 0.25, \spread, 0.06]);
+            Synth(\jSineSpray, [\freq, (r+28).midicps, \amp, 0.45, \spread, 0.06]);
             nil
         });
     }
 ];
 
-// ── NEGATIVE patterns ─────────────────────────────────────────────────────────
+// ── NEGATIVE ──────────────────────────────────────────────────────────────────
 ~jinglePools[\negative] = [
 
-    // N-0: Classic thud + descending FM crash sequence
+    // N-0: Deep thud + descending FM scream cascade
     {
         var r = ~roots[~state[\harmony]] ?? 60;
-        Synth(\jThudDeep, [\freq, (r-24).midicps, \amp, 0.72, \pan, 0]);
+        Synth(\jThudDeep,  [\freq, (r-24).midicps, \amp, 0.95, \pan, 0]);
         [0, -1, -3, -5, -8, -11].do { |s, i|
             SystemClock.sched(i * 0.10, {
                 Synth(\jFMScream, [\freq, (r+s).midicps,
-                                   \amp, 0.58 - (i*0.04),
+                                   \amp, 0.90 - (i*0.05),
                                    \pan, i.linlin(0,5,0.3,-0.3)]);
                 nil
             });
         };
     },
 
-    // N-1: Cluster smash + bass impact wall
+    // N-1: Cluster smash + bass wall
     {
         var r = ~roots[~state[\harmony]] ?? 60;
-        Synth(\jBassImpact, [\freq, (r-24).midicps, \amp, 0.74]);
-        Synth(\jClusterSmash, [\freq, (r-12).midicps, \amp, 0.58]);
+        Synth(\jBassImpact,   [\freq, (r-24).midicps, \amp, 0.95]);
+        Synth(\jClusterSmash, [\freq, (r-12).midicps, \amp, 0.88]);
         SystemClock.sched(0.32, {
-            Synth(\jClusterSmash, [\freq, (r-8).midicps, \amp, 0.44]);
+            Synth(\jClusterSmash, [\freq, (r-8).midicps, \amp, 0.72]);
             nil
         });
         SystemClock.sched(0.65, {
-            Synth(\jFMScream, [\freq, (r-3).midicps, \amp, 0.42, \pan, 0]);
+            Synth(\jFMScream, [\freq, (r-3).midicps, \amp, 0.75, \pan, 0]);
             nil
         });
     },
 
-    // N-2: Triple bass impacts at different pitches + descending FM scream
+    // N-2: Triple bass + descending FM screams
     {
         var r = ~roots[~state[\harmony]] ?? 60;
         [0, -5, -10].do { |s, i|
             SystemClock.sched(i * 0.14, {
-                Synth(\jThudDeep, [\freq, (r - 24 + s).midicps, \amp, 0.70 - (i*0.08),
+                Synth(\jThudDeep, [\freq, (r - 24 + s).midicps,
+                                   \amp, 0.90 - (i*0.08),
                                    \pan, i.linlin(0,2,-0.4,0.4)]);
                 nil
             });
@@ -651,7 +647,8 @@ s.sync;
             [0, -4, -8].do { |s, i|
                 SystemClock.sched(i * 0.16, {
                     Synth(\jFMScream, [\freq, (r+s+3).midicps,
-                                       \amp, 0.56-(i*0.06), \pan, (i.even.if(-0.45, 0.45))]);
+                                       \amp, 0.82-(i*0.07),
+                                       \pan, (i.even.if(-0.45, 0.45))]);
                     nil
                 });
             };
@@ -659,18 +656,18 @@ s.sync;
         });
     },
 
-    // N-3: Cluster wall + FM scream swarm (maximum chaos)
+    // N-3: Maximum chaos wall
     {
         var r = ~roots[~state[\harmony]] ?? 60;
-        Synth(\jBassImpact, [\freq, 40.midicps, \amp, 0.76]);
+        Synth(\jBassImpact, [\freq, 40.midicps, \amp, 1.0]);
         2.do { |i|
             Synth(\jClusterSmash, [\freq, (r - 12 + (i * 7)).midicps,
-                                    \amp, 0.52 - (i*0.08)]);
+                                    \amp, 0.82 - (i*0.08)]);
         };
         [0, 0.18, 0.38, 0.58].do { |t, i|
             SystemClock.sched(t, {
                 Synth(\jFMScream, [\freq, (r + [-6,-3,0,3][i]).midicps,
-                                   \amp, 0.55-(i*0.05),
+                                   \amp, 0.88-(i*0.06),
                                    \pan, [0.4,-0.4,0.4,-0.4][i]]);
                 nil
             });
@@ -678,7 +675,7 @@ s.sync;
     }
 ];
 
-// ── NEUTRAL patterns ──────────────────────────────────────────────────────────
+// ── NEUTRAL ───────────────────────────────────────────────────────────────────
 ~jinglePools[\neutral] = [
 
     // Nt-0: Bell trio + blip chord
@@ -687,13 +684,13 @@ s.sync;
         [0, 0.20, 0.36].do { |t, i|
             SystemClock.sched(t, {
                 Synth(\jKlank3, [\freq, (r + [7,12,7][i]).midicps,
-                                 \amp, [0.54,0.42,0.36][i],
+                                 \amp, [0.88,0.72,0.62][i],
                                  \pan, [-0.42,0,0.42][i]]);
                 nil
             });
         };
         [0, 5, 7].do { |s, i|
-            Synth(\jBlip, [\freq, (r+s).midicps, \amp, 0.32,
+            Synth(\jBlip, [\freq, (r+s).midicps, \amp, 0.58,
                            \pan, i.linlin(0,2,-0.5,0.5)]);
         };
     },
@@ -701,65 +698,72 @@ s.sync;
     // Nt-1: Deep bell + rising chime cascade
     {
         var r = ~roots[~state[\harmony]] ?? 60;
-        Synth(\jKlank3, [\freq, (r+7).midicps, \amp, 0.56, \pan, -0.32]);
+        Synth(\jKlank3, [\freq, (r+7).midicps, \amp, 0.88, \pan, -0.32]);
         [0, 7, 12, 16, 19].do { |s, i|
             SystemClock.sched(i * 0.13, {
                 Synth(\jChime, [\freq, (r+s+12).midicps,
-                                \amp, 0.40 - (i*0.04),
+                                \amp, 0.70 - (i*0.06),
                                 \pan, i.linlin(0,4,-0.65,0.65)]);
                 nil
             });
         };
     },
 
-    // Nt-2: Sine blip cluster + single FM chime
+    // Nt-2: Blip cluster + FM chime
     {
         var r = ~roots[~state[\harmony]] ?? 60;
         [0, 3, 7, 10, 14].do { |s, i|
             SystemClock.sched(i * 0.08, {
                 Synth(\jBlip, [\freq, (r+s+12).midicps,
-                               \amp, 0.36 - (i*0.03),
+                               \amp, 0.62 - (i*0.05),
                                \pan, i.linlin(0,4,-0.8,0.8)]);
                 nil
             });
         };
         SystemClock.sched(0.25, {
-            Synth(\jChime, [\freq, (r+19).midicps, \amp, 0.44, \pan, 0]);
+            Synth(\jChime, [\freq, (r+19).midicps, \amp, 0.72, \pan, 0]);
             nil
         });
     }
 ];
 
 // ============================================================================
-// 9. MUTATION ROUTINE  (random timbre swap every 8-20 seconds)
+// 9. MUTATION ROUTINE  (random timbre swap every 8-20 s)
 // ============================================================================
 ~mutationRoutine = Routine({
     loop {
         rrand(8.0, 20.0).wait;
-        if(~voices.any { |v| v.notNil }, {
-            ~mutateOneVoice.value;
-        });
+        if(~voices.any { |v| v.notNil }, { ~mutateOneVoice.value });
     }
 }).play;
 
 // ============================================================================
 // 10. OSC RESPONDERS
+//     Every handler logs to Post Window — use this to verify Unity→SC link.
 // ============================================================================
 
 OSCdef(\winrate, { |msg|
-    ~state[\winrate] = msg[1];
-    { ~morphVoices.value }.defer;
+    var newQ = msg[1].asFloat;
+    ("OSC /winrate  Q=" ++ newQ.round(0.001)).postln;
+    ~state[\winrate] = newQ;
+    // Full respawn whenever Q drifts more than 0.03 from last respawn
+    // (makes the background audibly track every significant board change)
+    if((newQ - ~lastRespawnQ).abs > 0.03, {
+        { ~respawnAll.value }.defer;
+    }, {
+        { ~morphVoices.value }.defer;
+    });
 }, '/chess/winrate');
 
 OSCdef(\delta, { |msg|
-    ~state[\delta] = msg[1];
+    ~state[\delta] = msg[1].asFloat;
 }, '/chess/delta');
 
 OSCdef(\confidence, { |msg|
     var prevC = ~state[\confidence];
-    ~state[\confidence] = msg[1];
-    // Voice count only changes at integer thresholds — respawn when it flips
-    if(~voiceCount.value(prevC) != ~voiceCount.value(msg[1].asFloat), {
+    var newC  = msg[1].asFloat;
+    ~state[\confidence] = newC;
+    if(~voiceCount.value(prevC) != ~voiceCount.value(newC), {
         { ~respawnAll.value }.defer;
     }, {
         { ~morphVoices.value }.defer;
@@ -768,16 +772,16 @@ OSCdef(\confidence, { |msg|
 
 OSCdef(\harmony, { |msg|
     var sym = msg[1].asString.asSymbol;
+    ("OSC /harmony  " ++ sym).postln;
     if(sym != ~state[\harmony], {
         ~state[\harmony] = sym;
-        ("Harmony -> " ++ sym).postln;
-        // Full voice + melody respawn for maximum harmonic contrast
         { ~respawnAll.value; ~startMelody.value }.defer;
     });
 }, '/chess/harmony');
 
 OSCdef(\jingle, { |msg|
     var sym = msg[1].asString.asSymbol;
+    ("OSC /jingle   " ++ sym).postln;
     ~state[\jingle] = sym;
     { ~fireJingle.value(sym) }.defer;
 }, '/chess/jingle');
@@ -788,7 +792,28 @@ OSCdef(\jingle, { |msg|
 0.5.wait;
 ~respawnAll.value;
 ~startMelody.value;
-"=== Chess Music Engine v3 (CHAOS EDITION) ready on port 57120. ===".postln;
+
+// Status display — posts every 10 s so you can confirm state without Unity
+~statusRoutine = Routine({
+    loop {
+        10.0.wait;
+        ("--- STATE | Q=" ++ ~state[\winrate].round(0.001)
+         ++ " C=" ++ ~state[\confidence].round(0.01)
+         ++ " harm=" ++ ~state[\harmony]
+         ++ " voices=" ++ ~voices.select(_.notNil).size).postln;
+    }
+}).play;
+
+// Audio self-test: fires one neutral jingle 2 s after boot.
+// If you hear it → SC audio works. Check Post Window for OSC messages from Unity.
+SystemClock.sched(2.0, {
+    "*** STARTUP TEST: firing neutral jingle (audio check) ***".postln;
+    { ~fireJingle.value(\neutral) }.defer;
+    nil
+});
+
+"=== Chess Music Engine v3 ready on port 57120. ===".postln;
+"=== Watch Post Window for OSC messages from Unity.  ===".postln;
 
 }; // end waitForBoot
 )

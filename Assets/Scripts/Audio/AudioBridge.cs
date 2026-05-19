@@ -26,6 +26,7 @@ namespace Chess
         void Awake() => OSCSender.Init(OSCHost, OSCPort);
         void OnDestroy() => OSCSender.Close();
 
+        // ── Called after every AI move (includes MCTS win-rate + visit count) ──
         public void OnMovePlayed(float winRate, float delta, int visitCount)
         {
             float C = Mathf.Log(visitCount + 1);
@@ -34,21 +35,43 @@ namespace Chess
             float dQ     = _smoothQ - _prevSmoothQ;
             _prevSmoothQ = _smoothQ;
 
+            // Lowered threshold 0.05→0.03 so more moves get positive/negative jingles
             string harmony = _smoothQ > 0.6f ? "Major" : _smoothQ < 0.4f ? "Minor" : "Neutral";
-            string jingle  = dQ >  0.05f ? "positive" : dQ < -0.05f ? "negative" : "neutral";
+            string jingle  = dQ >  0.03f ? "positive" : dQ < -0.03f ? "negative" : "neutral";
 
-            Debug.Log($"[AudioBridge] Q={_smoothQ:F3}  ΔQ={dQ:+0.000;-0.000}  C={C:F2}  [{harmony}] {jingle}");
+            Debug.Log($"[AudioBridge] AI  Q={_smoothQ:F3}  ΔQ={dQ:+0.000;-0.000}  C={C:F2}  [{harmony}] {jingle}");
 
-            OSCSender.Send("/chess/winrate",    _smoothQ);
+            SendAll(_smoothQ, dQ, C, harmony, jingle);
+        }
+
+        // ── Called after every player move (uses last known Q; signals SC about
+        //    the move so background and a marker jingle fire immediately) ──
+        public void OnPlayerMove()
+        {
+            // Keep smoothQ unchanged (no new MCTS data yet); use board evaluation
+            // direction encoded in the sign of _prevSmoothQ vs 0.5 as a hint.
+            // Simply re-send current state so SC re-evaluates background register.
+            float dQ     = 0f;          // player move: no Q change until AI responds
+            float C      = LastC;       // carry over last confidence
+            string harmony = Harmony;   // carry over last harmony
+            string jingle  = "neutral"; // every player move → neutral marker
+
+            Debug.Log($"[AudioBridge] PLY Q={_smoothQ:F3}  (player move marker)");
+
+            SendAll(_smoothQ, dQ, C, harmony, jingle);
+        }
+
+        void SendAll(float q, float dQ, float c, string harmony, string jingle)
+        {
+            OSCSender.Send("/chess/winrate",    q);
             OSCSender.Send("/chess/delta",      dQ);
-            OSCSender.Send("/chess/confidence", C);
+            OSCSender.Send("/chess/confidence", c);
             OSCSender.Send("/chess/harmony",    harmony);
             OSCSender.Send("/chess/jingle",     jingle);
 
-            // Expose to UI panel (read by GameManager.RefreshMetricsPanel)
-            SmoothQ  = _smoothQ;
+            SmoothQ  = q;
             SmoothDQ = dQ;
-            LastC    = C;
+            LastC    = c;
             Harmony  = harmony;
             Jingle   = jingle;
         }
