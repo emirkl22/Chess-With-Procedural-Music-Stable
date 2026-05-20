@@ -34,12 +34,15 @@ namespace Chess
 
         // ---- Controls panel (bottom right) -------------------------------
         TextMesh _pSecCtrl;     // "-- CONTROLS --"
+        TextMesh _pCtrlFont;    // "Font    1.00x"
         TextMesh _pCtrlAnim;    // "Anim    0.30s"
         TextMesh _pCtrlDiff;    // "AI      1500"
         TextMesh _pCtrlHist;    // "Move    5/12"
-        TextMesh _pCtrlHelp;    // "Keys: <- -> [ ] , . R"
+        TextMesh _pCtrlHelp;    // help line
 
         // ---- Click-through callbacks (wired by GameManager.SetupComponents) ---
+        public System.Action OnFontSmaller;
+        public System.Action OnFontBigger;
         public System.Action OnAnimSlower;
         public System.Action OnAnimFaster;
         public System.Action OnSimsDown;
@@ -51,6 +54,13 @@ namespace Chess
         // Cached unit sprite for button backgrounds
         Sprite _unitSprite;
 
+        // ---- Font scaling -----------------------------------------------
+        // Every label created via MkLabel() is registered here with its base
+        // point size so SetFontScale() can rescale them all at once.
+        readonly System.Collections.Generic.List<(TextMesh tm, int baseSize)>
+            _scalableLabels = new System.Collections.Generic.List<(TextMesh, int)>();
+        float _fontScale = 1.0f;
+
         // Panel left-edge x  (board tiles occupy x in [−0.5 , 7.5])
         const float PX    = 9.8f;
         const float SCALE = 0.082f;
@@ -60,36 +70,39 @@ namespace Chess
         // =================================================================
         public void Build()
         {
-            // Top bar (centered above the board)
-            _turnLabel   = MkLabel("TurnLabel",   new Vector3(4f, 8.75f, 0f), 22, Color.white);
-            _statusLabel = MkLabel("StatusLabel", new Vector3(4f, 9.25f, 0f), 18, Color.yellow);
+            // Base font sizes (+2 vs previous baseline) — scaled at runtime
+            // by _fontScale via SetFontScale().
+            // Top bar
+            _turnLabel   = MkLabel("TurnLabel",   new Vector3(4f, 8.75f, 0f), 24, Color.white);
+            _statusLabel = MkLabel("StatusLabel", new Vector3(4f, 9.25f, 0f), 20, Color.yellow);
 
-            // Panel rows, stepping y downward
+            // Panel rows
             Color gray   = new Color(0.48f, 0.48f, 0.48f);
             Color accent = new Color(0.85f, 0.82f, 1.00f);
 
             float y = 8.25f;
-            _pTitle    = PRow("PTitle",    ref y, 0.00f, 16, accent);
-            _pSecBg    = PRow("PSecBg",    ref y, 0.40f, 12, gray);
-            _pQ        = PRow("PQ",        ref y, 0.34f, 14, Color.white);
-            _pC        = PRow("PC",        ref y, 0.37f, 14, Color.white);
-            _pHarmony  = PRow("PHarmony",  ref y, 0.37f, 14, Color.white);
-            _pSecMove  = PRow("PSecMove",  ref y, 0.44f, 12, gray);
-            _pDQ       = PRow("PDQ",       ref y, 0.34f, 14, Color.white);
-            _pSecState = PRow("PSecState", ref y, 0.44f, 12, gray);
-            _pMaterial = PRow("PMaterial", ref y, 0.34f, 14, Color.white);
-            _pPhase    = PRow("PPhase",    ref y, 0.37f, 14, Color.white);
-            _pLegal    = PRow("PLegal",    ref y, 0.37f, 14, Color.white);
-            _pSims     = PRow("PSims",     ref y, 0.37f, 14, Color.white);
-            _pCheck    = PRow("PCheck",    ref y, 0.37f, 14, Color.white);
-            _pPly      = PRow("PPly",      ref y, 0.37f, 14, Color.white);
+            _pTitle    = PRow("PTitle",    ref y, 0.00f, 18, accent);
+            _pSecBg    = PRow("PSecBg",    ref y, 0.42f, 14, gray);
+            _pQ        = PRow("PQ",        ref y, 0.36f, 16, Color.white);
+            _pC        = PRow("PC",        ref y, 0.39f, 16, Color.white);
+            _pHarmony  = PRow("PHarmony",  ref y, 0.39f, 16, Color.white);
+            _pSecMove  = PRow("PSecMove",  ref y, 0.46f, 14, gray);
+            _pDQ       = PRow("PDQ",       ref y, 0.36f, 16, Color.white);
+            _pSecState = PRow("PSecState", ref y, 0.46f, 14, gray);
+            _pMaterial = PRow("PMaterial", ref y, 0.36f, 16, Color.white);
+            _pPhase    = PRow("PPhase",    ref y, 0.39f, 16, Color.white);
+            _pLegal    = PRow("PLegal",    ref y, 0.39f, 16, Color.white);
+            _pSims     = PRow("PSims",     ref y, 0.39f, 16, Color.white);
+            _pCheck    = PRow("PCheck",    ref y, 0.39f, 16, Color.white);
+            _pPly      = PRow("PPly",      ref y, 0.39f, 16, Color.white);
 
-            // Controls panel
-            _pSecCtrl  = PRow("PSecCtrl",  ref y, 0.46f, 12, gray);
-            _pCtrlAnim = PRow("PCtrlAnim", ref y, 0.34f, 13, new Color(0.80f, 0.92f, 1f));
-            _pCtrlDiff = PRow("PCtrlDiff", ref y, 0.36f, 13, new Color(0.80f, 0.92f, 1f));
-            _pCtrlHist = PRow("PCtrlHist", ref y, 0.36f, 13, new Color(0.80f, 0.92f, 1f));
-            _pCtrlHelp = PRow("PCtrlHelp", ref y, 0.42f, 10, gray);
+            // Controls panel — added a Font-size row at the top of the group
+            _pSecCtrl  = PRow("PSecCtrl",  ref y, 0.48f, 14, gray);
+            _pCtrlFont = PRow("PCtrlFont", ref y, 0.36f, 15, new Color(0.80f, 0.92f, 1f));
+            _pCtrlAnim = PRow("PCtrlAnim", ref y, 0.38f, 15, new Color(0.80f, 0.92f, 1f));
+            _pCtrlDiff = PRow("PCtrlDiff", ref y, 0.38f, 15, new Color(0.80f, 0.92f, 1f));
+            _pCtrlHist = PRow("PCtrlHist", ref y, 0.38f, 15, new Color(0.80f, 0.92f, 1f));
+            _pCtrlHelp = PRow("PCtrlHelp", ref y, 0.44f, 12, gray);
 
             // Static header strings
             _pTitle.text    = "[ AUDIO ENGINE ]";
@@ -108,18 +121,36 @@ namespace Chess
         }
 
         // -----------------------------------------------------------------
+        // Font-size scaling — multiplies the base point size of every
+        // registered TextMesh by the given factor.  Button labels are NOT
+        // scaled so the buttons keep their fixed footprint.
+        // -----------------------------------------------------------------
+        public void SetFontScale(float scale)
+        {
+            _fontScale = Mathf.Clamp(scale, 0.6f, 1.6f);
+            foreach (var pair in _scalableLabels)
+            {
+                if (pair.tm != null)
+                    pair.tm.fontSize = Mathf.Max(4, Mathf.RoundToInt(pair.baseSize * _fontScale));
+            }
+        }
+
+        // -----------------------------------------------------------------
         // Clickable control buttons (world-space, raycast by SelectionManager)
         // -----------------------------------------------------------------
         void BuildControlButtons()
         {
-            // X positions for [<] [>] [R] buttons (must be right of the value text)
             const float xMinus = 11.75f;
             const float xPlus  = 12.30f;
             const float xExtra = 12.85f;
 
+            float yFont = _pCtrlFont.transform.position.y;
             float yAnim = _pCtrlAnim.transform.position.y;
             float yDiff = _pCtrlDiff.transform.position.y;
             float yHist = _pCtrlHist.transform.position.y;
+
+            MakeButton("<", new Vector3(xMinus, yFont, 0f), () => OnFontSmaller?.Invoke());
+            MakeButton(">", new Vector3(xPlus,  yFont, 0f), () => OnFontBigger?.Invoke());
 
             MakeButton("<", new Vector3(xMinus, yAnim, 0f), () => OnAnimSlower?.Invoke());
             MakeButton(">", new Vector3(xPlus,  yAnim, 0f), () => OnAnimFaster?.Invoke());
@@ -296,23 +327,27 @@ namespace Chess
         public void RefreshControls(float animSeconds, int aiSims,
                                     int historyIdx, int historyTotal)
         {
+            // Font scale — purple gradient
+            _pCtrlFont.color = new Color(0.85f, 0.78f, 1.00f);
+            _pCtrlFont.text  = string.Format("Font  {0:F2}x", _fontScale);
+
             // Animation speed — green for fast, red for slow
             float animNorm = Mathf.InverseLerp(0.05f, 1.5f, animSeconds);
             _pCtrlAnim.color = Color.Lerp(new Color(0.30f, 1.00f, 0.40f),
                                           new Color(1.00f, 0.55f, 0.20f), animNorm);
-            _pCtrlAnim.text  = string.Format("Anim   {0:F2}s", animSeconds);
+            _pCtrlAnim.text  = string.Format("Anim  {0:F2}s", animSeconds);
 
             // AI difficulty — blue for low, gold for high
             float simNorm = Mathf.InverseLerp(100f, 5000f, aiSims);
             _pCtrlDiff.color = Color.Lerp(new Color(0.55f, 0.80f, 1.00f),
                                           new Color(1.00f, 0.85f, 0.20f), simNorm);
-            _pCtrlDiff.text  = string.Format("AI    {0,5}", aiSims);
+            _pCtrlDiff.text  = string.Format("AI   {0,5}", aiSims);
 
             // History position — gray when reviewing past, green at latest
             bool atLatest = historyIdx == historyTotal;
             _pCtrlHist.color = atLatest ? new Color(0.60f, 1.00f, 0.60f)
                                         : new Color(1.00f, 0.75f, 0.30f);
-            _pCtrlHist.text  = string.Format("Move  {0,3}/{1,-3}", historyIdx, historyTotal);
+            _pCtrlHist.text  = string.Format("Move {0,3}/{1,-3}", historyIdx, historyTotal);
         }
 
         // =================================================================
@@ -356,13 +391,17 @@ namespace Chess
             go.transform.localScale = Vector3.one * SCALE;
 
             var tm       = go.AddComponent<TextMesh>();
-            tm.fontSize  = fontSize;
+            tm.fontSize  = Mathf.Max(4, Mathf.RoundToInt(fontSize * _fontScale));
             tm.alignment = TextAlignment.Left;
             tm.anchor    = TextAnchor.MiddleLeft;
             tm.color     = color;
 
             var mr = go.GetComponent<MeshRenderer>();
             if (mr != null) mr.sortingOrder = 5;
+
+            // Register for future font-scale changes (button labels skip this
+            // by creating their TextMesh inline rather than via MkLabel).
+            _scalableLabels.Add((tm, fontSize));
             return tm;
         }
     }

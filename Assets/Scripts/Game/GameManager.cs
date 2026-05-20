@@ -32,9 +32,14 @@ namespace Chess
         [Range(0.05f, 1.50f)]
         [SerializeField] float animationSeconds = 0.30f;
 
+        [Header("UI Font scale — also adjustable in-game via UI buttons / ; ' keys")]
+        [Range(0.6f, 1.6f)]
+        [SerializeField] float fontScale = 1.0f;
+
         // Used to detect Inspector edits at runtime and propagate them
         int   _lastSyncedSims;
         float _lastSyncedAnim;
+        float _lastSyncedFont;
 
         // ---- State machine ----
         enum GamePhase { WaitingForInput, PieceSelected, AIThinking, GameOver, Reviewing }
@@ -87,6 +92,8 @@ namespace Chess
             _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyMoves.Count);
 
             // Wire UI button callbacks → adjustment methods
+            _ui.OnFontSmaller    = () => AdjustFontScale(-0.05f);
+            _ui.OnFontBigger     = () => AdjustFontScale(+0.05f);
             _ui.OnAnimSlower     = () => AdjustAnimSpeed(+0.05f);
             _ui.OnAnimFaster     = () => AdjustAnimSpeed(-0.05f);
             _ui.OnSimsDown       = () => AdjustSims(-100);
@@ -95,8 +102,13 @@ namespace Chess
             _ui.OnHistoryForward = () => NavigateHistory(+1);
             _ui.OnReset          = () => ResetToLatest();
 
+            // Apply initial font scale and seed the sync caches
+            _ui.SetFontScale(fontScale);
+            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
+
             _lastSyncedSims = mctsSimulations;
             _lastSyncedAnim = animationSeconds;
+            _lastSyncedFont = fontScale;
         }
 
         // -----------------------------------------------------------------------
@@ -104,18 +116,30 @@ namespace Chess
         // -----------------------------------------------------------------------
         void Update()
         {
-            // 1. Inspector → runtime sync.  If the user drags the slider in the
+            // 1. Inspector → runtime sync.  If a slider is dragged in the
             //    Inspector during Play mode, push the change into MCTS + UI.
-            if (mctsSimulations != _lastSyncedSims || !Mathf.Approximately(animationSeconds, _lastSyncedAnim))
+            bool changed = false;
+            if (mctsSimulations != _lastSyncedSims)
             {
                 if (_mcts != null) _mcts.SimulationsPerMove = mctsSimulations;
-                _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
                 _lastSyncedSims = mctsSimulations;
-                _lastSyncedAnim = animationSeconds;
+                changed = true;
             }
+            if (!Mathf.Approximately(animationSeconds, _lastSyncedAnim))
+            {
+                _lastSyncedAnim = animationSeconds;
+                changed = true;
+            }
+            if (!Mathf.Approximately(fontScale, _lastSyncedFont))
+            {
+                _ui.SetFontScale(fontScale);
+                _lastSyncedFont = fontScale;
+                changed = true;
+            }
+            if (changed)
+                _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
 
-            // 2. Keyboard shortcuts (new Input System — works whether the
-            //    project uses Input System Only or Both input back-ends).
+            // 2. Keyboard shortcuts (new Input System)
             var kb = Keyboard.current;
             if (kb == null) return;
 
@@ -125,6 +149,8 @@ namespace Chess
             else if (kb.rightBracketKey.wasPressedThisFrame) AdjustAnimSpeed(-0.05f);
             else if (kb.commaKey       .wasPressedThisFrame) AdjustSims(-100);
             else if (kb.periodKey      .wasPressedThisFrame) AdjustSims(+100);
+            else if (kb.semicolonKey   .wasPressedThisFrame) AdjustFontScale(-0.05f);
+            else if (kb.quoteKey       .wasPressedThisFrame) AdjustFontScale(+0.05f);
             else if (kb.rKey           .wasPressedThisFrame) ResetToLatest();
         }
 
@@ -140,6 +166,14 @@ namespace Chess
             mctsSimulations  = Mathf.Clamp(mctsSimulations + delta, 100, 5000);
             _lastSyncedSims  = mctsSimulations;
             if (_mcts != null) _mcts.SimulationsPerMove = mctsSimulations;
+            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
+        }
+
+        void AdjustFontScale(float delta)
+        {
+            fontScale       = Mathf.Clamp(fontScale + delta, 0.6f, 1.6f);
+            _lastSyncedFont = fontScale;
+            _ui.SetFontScale(fontScale);
             _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
         }
 
