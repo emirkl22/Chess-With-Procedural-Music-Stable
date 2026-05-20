@@ -8,16 +8,25 @@ namespace Chess
     // -----------------------------------------------------------------------
     // GameManager – single entry point for the scene.
     //
+    // ExecuteAlways: board, pieces, and the UI panel are also created in
+    // edit-mode so they are visible in the Scene view before Play is pressed.
+    // Gameplay components (SelectionManager, MCTSAgent, AudioBridge) are
+    // only attached during Play mode so they don't get serialised into the
+    // saved scene and don't try to open UDP sockets at edit time.
+    //
     // Adjustable at runtime (Inspector sliders, on-screen buttons, OR keys):
     //   * animationSeconds — piece-move animation duration
     //   * mctsSimulations  — AI difficulty (more sims = stronger but slower)
+    //   * fontScale        — UI font multiplier
     //
-    // Keys (new Input System):
+    // Keys (new Input System, Play mode only):
     //   <- / ->     Navigate move history
     //   [   /  ]    Slower / faster piece animation
     //   ,   /  .    Lower / higher AI difficulty
-    //    R          Jump back to the latest played position
+    //   ;   /  '    Smaller / bigger UI fonts
+    //    R          Jump to the latest played position
     // -----------------------------------------------------------------------
+    [ExecuteAlways]
     public class GameManager : MonoBehaviour
     {
         // ---- Inspector ----
@@ -69,53 +78,94 @@ namespace Chess
         MCTSAgent           _mcts;
         AudioBridge         _audio;
 
-        // -----------------------------------------------------------------------
-        void Awake()
+        // ===================================================================
+        // Lifecycle — edit mode and play mode both go through Build()
+        // ===================================================================
+        void OnEnable()
         {
+            // Tear down any stale children from a previous build (post script
+            // reload, post scene reload, or stale serialised state) and then
+            // rebuild a fresh hierarchy.
+            TeardownChildren();
+            Build();
+        }
+
+        void OnDisable()
+        {
+            // Only clean up when transitioning out in edit mode.  Play-mode
+            // exit lets Unity revert the scene by itself; tearing down here
+            // would just race with that.
+            if (!Application.isPlaying) TeardownChildren();
+        }
+
+        // -----------------------------------------------------------------
+        // Build the visual hierarchy (always) + gameplay components (Play only)
+        // -----------------------------------------------------------------
+        void Build()
+        {
+            // Board rendering uses absolute world coords — keep at origin.
             transform.position = Vector3.zero;
             transform.rotation = Quaternion.identity;
 
             _board = new BoardState();
-            SetupCamera();
+
+            // Visuals are always created (so Scene-view preview works)
+            if (Application.isPlaying) SetupCamera();
             SetupBoard();
             SetupUI();
-            SetupComponents();
-        }
 
-        void Start()
-        {
             _pieceVisuals.Refresh(_board);
             _ui.SetTurn(PieceColor.White);
-            RefreshMetricsPanel();
-            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyMoves.Count);
-
-            // Wire UI button callbacks → adjustment methods
-            _ui.OnFontSmaller    = () => AdjustFontScale(-0.05f);
-            _ui.OnFontBigger     = () => AdjustFontScale(+0.05f);
-            _ui.OnAnimSlower     = () => AdjustAnimSpeed(+0.05f);
-            _ui.OnAnimFaster     = () => AdjustAnimSpeed(-0.05f);
-            _ui.OnSimsDown       = () => AdjustSims(-100);
-            _ui.OnSimsUp         = () => AdjustSims(+100);
-            _ui.OnHistoryBack    = () => NavigateHistory(-1);
-            _ui.OnHistoryForward = () => NavigateHistory(+1);
-            _ui.OnReset          = () => ResetToLatest();
-
-            // Apply initial font scale and seed the sync caches
             _ui.SetFontScale(fontScale);
-            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
 
+            // Gameplay components only in Play mode — these own UDP sockets
+            // and AI coroutines so they must NOT live in the edit-mode scene.
+            if (Application.isPlaying)
+            {
+                SetupComponents();
+                WireUICallbacks();
+            }
+
+            // Sync caches must be seeded in both modes so Update() doesn't
+            // think every Inspector value is "newly changed" on first tick.
             _lastSyncedSims = mctsSimulations;
             _lastSyncedAnim = animationSeconds;
             _lastSyncedFont = fontScale;
+
+            RefreshMetricsPanel();
+            _ui.RefreshControls(animationSeconds, mctsSimulations,
+                                _historyIdx, _historyStates.Count);
         }
 
-        // -----------------------------------------------------------------------
-        // Keyboard shortcuts (new Input System) + Inspector-edit sync
-        // -----------------------------------------------------------------------
+        // Destroys every child GO under GameManager + any play-mode-only
+        // components that may have been accidentally serialised.
+        void TeardownChildren()
+        {
+            for (int i = transform.childCount - 1; i >= 0; i--)
+            {
+                var go = transform.GetChild(i).gameObject;
+                if (Application.isPlaying) Destroy(go);
+                else                       DestroyImmediate(go);
+            }
+
+            if (!Application.isPlaying)
+            {
+                var sel   = GetComponent<SelectionManager>();
+                var mcts  = GetComponent<MCTSAgent>();
+                var audio = GetComponent<AudioBridge>();
+                if (sel   != null) DestroyImmediate(sel);
+                if (mcts  != null) DestroyImmediate(mcts);
+                if (audio != null) DestroyImmediate(audio);
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Keyboard + Inspector-edit sync — Play mode only
+        // -------------------------------------------------------------------
         void Update()
         {
-            // 1. Inspector → runtime sync.  If a slider is dragged in the
-            //    Inspector during Play mode, push the change into MCTS + UI.
+            // 1. Inspector → runtime sync (also runs in edit mode so dragging
+            //    a slider updates the Scene-view preview immediately).
             bool changed = false;
             if (mctsSimulations != _lastSyncedSims)
             {
@@ -130,14 +180,15 @@ namespace Chess
             }
             if (!Mathf.Approximately(fontScale, _lastSyncedFont))
             {
-                _ui.SetFontScale(fontScale);
+                if (_ui != null) _ui.SetFontScale(fontScale);
                 _lastSyncedFont = fontScale;
                 changed = true;
             }
-            if (changed)
+            if (changed && _ui != null)
                 _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
 
-            // 2. Keyboard shortcuts (new Input System)
+            // 2. Keyboard shortcuts — Play mode only
+            if (!Application.isPlaying) return;
             var kb = Keyboard.current;
             if (kb == null) return;
 
@@ -175,16 +226,12 @@ namespace Chess
             _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
         }
 
-        // -----------------------------------------------------------------------
-        // Input callback (from SelectionManager)
-        // -----------------------------------------------------------------------
+        // -------------------------------------------------------------------
+        // Input callback (from SelectionManager — Play mode only)
+        // -------------------------------------------------------------------
         public void OnSquareClicked(int row, int col)
         {
             if (_phase == GamePhase.AIThinking || _phase == GamePhase.GameOver) return;
-
-            // If we're browsing history, a click should leap back to the latest
-            // position. The user must explicitly press Right (or press R) to
-            // get out of review mode — clicks alone don't accidentally branch.
             if (_phase == GamePhase.Reviewing) return;
 
             if (_phase == GamePhase.WaitingForInput)
@@ -212,9 +259,9 @@ namespace Chess
             }
         }
 
-        // -----------------------------------------------------------------------
+        // -------------------------------------------------------------------
         // Player move
-        // -----------------------------------------------------------------------
+        // -------------------------------------------------------------------
         void TrySelectPiece(int row, int col)
         {
             int piece = _board.Board[row, col];
@@ -235,7 +282,7 @@ namespace Chess
 
         IEnumerator ExecutePlayerMoveCo(Move move)
         {
-            _phase = GamePhase.AIThinking;   // block clicks during animation
+            _phase = GamePhase.AIThinking;
 
             int        captureValue = GetCaptureValue(move);
             PieceColor mover        = _board.CurrentTurn;
@@ -262,9 +309,9 @@ namespace Chess
             yield return StartCoroutine(RunAI());
         }
 
-        // -----------------------------------------------------------------------
+        // -------------------------------------------------------------------
         // AI move
-        // -----------------------------------------------------------------------
+        // -------------------------------------------------------------------
         IEnumerator RunAI()
         {
             Move? captured = null;
@@ -312,13 +359,11 @@ namespace Chess
             }
         }
 
-        // -----------------------------------------------------------------------
+        // -------------------------------------------------------------------
         // History management
-        // -----------------------------------------------------------------------
+        // -------------------------------------------------------------------
         void PushHistory(Move m, BoardState postState)
         {
-            // If we've navigated backward and then played a new move, the
-            // forward history is discarded (standard chess-review branching).
             if (_historyIdx < _historyStates.Count)
             {
                 _historyStates.RemoveRange(_historyIdx, _historyStates.Count - _historyIdx);
@@ -337,7 +382,6 @@ namespace Chess
             if (newIdx == _historyIdx) return;
             _historyIdx = newIdx;
 
-            // Restore board state
             _board = newIdx == 0
                    ? new BoardState()
                    : new BoardState(_historyStates[newIdx - 1]);
@@ -356,9 +400,8 @@ namespace Chess
                 _phase = GamePhase.Reviewing;
             }
 
-            // Send material to SC so background follows reviewed position
             int matCp = BoardEvaluator.Evaluate(_board);
-            _audio.SendMaterialOnly(matCp);
+            if (_audio != null) _audio.SendMaterialOnly(matCp);
 
             RefreshAll();
         }
@@ -369,10 +412,9 @@ namespace Chess
             NavigateHistory(_historyStates.Count - _historyIdx);
         }
 
-        // -----------------------------------------------------------------------
-        // Capture value lookup (standard piece values)
-        //   Pawn=1, Knight=3, Bishop=3, Rook=5, Queen=10
-        // -----------------------------------------------------------------------
+        // -------------------------------------------------------------------
+        // Capture value lookup (Pawn=1, Knight/Bishop=3, Rook=5, Queen=10)
+        // -------------------------------------------------------------------
         int GetCaptureValue(Move move)
         {
             if (move.IsEnPassant) return 1;
@@ -390,9 +432,6 @@ namespace Chess
             }
         }
 
-        // -----------------------------------------------------------------------
-        // Game over detection
-        // -----------------------------------------------------------------------
         bool CheckGameOver(PieceColor playerToCheck)
         {
             var legalMoves = MoveGenerator.GetLegalMoves(_board);
@@ -414,9 +453,9 @@ namespace Chess
             return true;
         }
 
-        // -----------------------------------------------------------------------
+        // -------------------------------------------------------------------
         // Scene / component setup
-        // -----------------------------------------------------------------------
+        // -------------------------------------------------------------------
         void SetupCamera()
         {
             var cam = Camera.main;
@@ -467,9 +506,22 @@ namespace Chess
             _audio = gameObject.AddComponent<AudioBridge>();
         }
 
-        // -----------------------------------------------------------------------
-        // Metrics + controls refresh
-        // -----------------------------------------------------------------------
+        void WireUICallbacks()
+        {
+            _ui.OnFontSmaller    = () => AdjustFontScale(-0.05f);
+            _ui.OnFontBigger     = () => AdjustFontScale(+0.05f);
+            _ui.OnAnimSlower     = () => AdjustAnimSpeed(+0.05f);
+            _ui.OnAnimFaster     = () => AdjustAnimSpeed(-0.05f);
+            _ui.OnSimsDown       = () => AdjustSims(-100);
+            _ui.OnSimsUp         = () => AdjustSims(+100);
+            _ui.OnHistoryBack    = () => NavigateHistory(-1);
+            _ui.OnHistoryForward = () => NavigateHistory(+1);
+            _ui.OnReset          = () => ResetToLatest();
+        }
+
+        // -------------------------------------------------------------------
+        // Metrics + controls refresh — handles null _audio (edit mode)
+        // -------------------------------------------------------------------
         void RefreshAll()
         {
             RefreshMetricsPanel();
@@ -484,17 +536,14 @@ namespace Chess
             bool inCheck = MoveGenerator.IsInCheck(_board, _board.CurrentTurn);
 
             _ui.RefreshMetrics(
-                _audio.SmoothQ,
-                _audio.SmoothDQ,
-                _audio.LastC,
-                _audio.Harmony,
-                _audio.Jingle,
-                mat,
-                moves.Count,
-                inCheck,
-                _plyNumber,
-                ComputePhase(),
-                _mcts != null ? _mcts.LastVisitCount : 0);
+                _audio != null ? _audio.SmoothQ  : 0.5f,
+                _audio != null ? _audio.SmoothDQ : 0f,
+                _audio != null ? _audio.LastC    : 0f,
+                _audio != null ? _audio.Harmony  : "Neutral",
+                _audio != null ? _audio.Jingle   : "neutral",
+                mat, moves.Count, inCheck,
+                _plyNumber, ComputePhase(),
+                _mcts  != null ? _mcts.LastVisitCount : 0);
         }
 
         string ComputePhase()
