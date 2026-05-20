@@ -49,8 +49,6 @@ namespace Chess
         BoardState _board;
         List<Move> _selectedMoves = new List<Move>();
         int        _selectedRow = -1, _selectedCol = -1;
-        Move       _lastMove;
-        bool       _hasLastMove;
 
         // ---- Move history (snapshots AFTER each ply) ---------------------
         readonly List<BoardState> _historyStates = new List<BoardState>();
@@ -243,7 +241,6 @@ namespace Chess
             PieceColor mover        = _board.CurrentTurn;
 
             _board.ApplyMove(move);
-            _lastMove = move; _hasLastMove = true;
             _highlights.Clear();
 
             yield return StartCoroutine(
@@ -293,7 +290,6 @@ namespace Chess
             PieceColor mover        = _board.CurrentTurn;
 
             _board.ApplyMove(m);
-            _lastMove = m; _hasLastMove = true;
             _highlights.Clear();
 
             yield return StartCoroutine(
