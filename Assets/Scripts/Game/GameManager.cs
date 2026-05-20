@@ -34,7 +34,7 @@ namespace Chess
 
         [Header("UI Font scale — also adjustable in-game via UI buttons / ; ' keys")]
         [Range(0.6f, 1.6f)]
-        [SerializeField] float fontScale = 1.0f;
+        [SerializeField] float fontScale = 1.60f;
 
         // Used to detect Inspector edits at runtime and propagate them
         int   _lastSyncedSims;
