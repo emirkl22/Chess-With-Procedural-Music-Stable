@@ -34,10 +34,22 @@ namespace Chess
 
         // ---- Controls panel (bottom right) -------------------------------
         TextMesh _pSecCtrl;     // "-- CONTROLS --"
-        TextMesh _pCtrlAnim;    // "Anim speed  0.30s    [   ]"
-        TextMesh _pCtrlDiff;    // "AI sims     1500     , ."
-        TextMesh _pCtrlHist;    // "Move        #12/12   < >"
+        TextMesh _pCtrlAnim;    // "Anim    0.30s"
+        TextMesh _pCtrlDiff;    // "AI      1500"
+        TextMesh _pCtrlHist;    // "Move    5/12"
         TextMesh _pCtrlHelp;    // "Keys: <- -> [ ] , . R"
+
+        // ---- Click-through callbacks (wired by GameManager.SetupComponents) ---
+        public System.Action OnAnimSlower;
+        public System.Action OnAnimFaster;
+        public System.Action OnSimsDown;
+        public System.Action OnSimsUp;
+        public System.Action OnHistoryBack;
+        public System.Action OnHistoryForward;
+        public System.Action OnReset;
+
+        // Cached unit sprite for button backgrounds
+        Sprite _unitSprite;
 
         // Panel left-edge x  (board tiles occupy x in [−0.5 , 7.5])
         const float PX    = 9.8f;
@@ -85,11 +97,85 @@ namespace Chess
             _pSecMove.text  = "-- LAST MOVE --";
             _pSecState.text = "-- BOARD STATE --";
             _pSecCtrl.text  = "-- CONTROLS --";
-            _pCtrlHelp.text = "<- -> nav   [ ] anim   , . AI   R reset";
+            _pCtrlHelp.text = "Click buttons or use keys";
+
+            // Build the clickable buttons next to each control row
+            BuildControlButtons();
 
             // Neutral initial values (shown before first AI move)
             RefreshMetrics(0.5f, 0f, 0f, "Neutral", "neutral", 0, 20, false, 0, "OPENING", 0);
             RefreshControls(0.30f, 1500, 0, 0);
+        }
+
+        // -----------------------------------------------------------------
+        // Clickable control buttons (world-space, raycast by SelectionManager)
+        // -----------------------------------------------------------------
+        void BuildControlButtons()
+        {
+            // X positions for [<] [>] [R] buttons (must be right of the value text)
+            const float xMinus = 11.75f;
+            const float xPlus  = 12.30f;
+            const float xExtra = 12.85f;
+
+            float yAnim = _pCtrlAnim.transform.position.y;
+            float yDiff = _pCtrlDiff.transform.position.y;
+            float yHist = _pCtrlHist.transform.position.y;
+
+            MakeButton("<", new Vector3(xMinus, yAnim, 0f), () => OnAnimSlower?.Invoke());
+            MakeButton(">", new Vector3(xPlus,  yAnim, 0f), () => OnAnimFaster?.Invoke());
+
+            MakeButton("<", new Vector3(xMinus, yDiff, 0f), () => OnSimsDown?.Invoke());
+            MakeButton(">", new Vector3(xPlus,  yDiff, 0f), () => OnSimsUp?.Invoke());
+
+            MakeButton("<", new Vector3(xMinus, yHist, 0f), () => OnHistoryBack?.Invoke());
+            MakeButton(">", new Vector3(xPlus,  yHist, 0f), () => OnHistoryForward?.Invoke());
+            MakeButton("R", new Vector3(xExtra, yHist, 0f), () => OnReset?.Invoke());
+        }
+
+        UIButton MakeButton(string label, Vector3 pos, System.Action onClick)
+        {
+            // Background quad
+            var bg = new GameObject($"Btn_{label}");
+            bg.transform.SetParent(transform, false);
+            bg.transform.position   = pos;
+            bg.transform.localScale = new Vector3(0.45f, 0.30f, 1f);
+
+            var sr = bg.AddComponent<SpriteRenderer>();
+            sr.sprite       = MakeUnitSprite();
+            sr.sortingOrder = 4;
+
+            var col = bg.AddComponent<BoxCollider2D>();
+            col.size = Vector2.one;          // unit-sprite is 1×1, scaled by transform
+
+            var btn = bg.AddComponent<UIButton>();
+            btn.OnClickAction = onClick;
+
+            // Label as separate GO (parented to UI root, NOT to scaled bg)
+            var labelGO = new GameObject($"BtnLbl_{label}");
+            labelGO.transform.SetParent(transform, false);
+            labelGO.transform.position   = new Vector3(pos.x, pos.y, pos.z - 0.2f);
+            labelGO.transform.localScale = Vector3.one * SCALE * 1.4f;
+
+            var tm       = labelGO.AddComponent<TextMesh>();
+            tm.text      = label;
+            tm.fontSize  = 22;
+            tm.alignment = TextAlignment.Center;
+            tm.anchor    = TextAnchor.MiddleCenter;
+            tm.color     = new Color(1f, 1f, 1f);
+            var mr       = labelGO.GetComponent<MeshRenderer>();
+            if (mr != null) mr.sortingOrder = 6;
+
+            return btn;
+        }
+
+        Sprite MakeUnitSprite()
+        {
+            if (_unitSprite != null) return _unitSprite;
+            var tex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+            tex.SetPixel(0, 0, Color.white);
+            tex.Apply();
+            _unitSprite = Sprite.Create(tex, new Rect(0, 0, 1, 1), new Vector2(0.5f, 0.5f), 1f);
+            return _unitSprite;
         }
 
         // Creates a row at the current y, then decrements y by stepDown.
@@ -211,24 +297,22 @@ namespace Chess
                                     int historyIdx, int historyTotal)
         {
             // Animation speed — green for fast, red for slow
-            float animNorm = Mathf.InverseLerp(0.05f, 1.0f, animSeconds);
+            float animNorm = Mathf.InverseLerp(0.05f, 1.5f, animSeconds);
             _pCtrlAnim.color = Color.Lerp(new Color(0.30f, 1.00f, 0.40f),
                                           new Color(1.00f, 0.55f, 0.20f), animNorm);
-            _pCtrlAnim.text  = string.Format("Anim   {0:F2}s  {1}", animSeconds, Bar(1f - animNorm, 6));
+            _pCtrlAnim.text  = string.Format("Anim   {0:F2}s", animSeconds);
 
-            // AI difficulty (sims) — blue for low, gold for high
-            float simNorm = Mathf.InverseLerp(100f, 3000f, aiSims);
+            // AI difficulty — blue for low, gold for high
+            float simNorm = Mathf.InverseLerp(100f, 5000f, aiSims);
             _pCtrlDiff.color = Color.Lerp(new Color(0.55f, 0.80f, 1.00f),
                                           new Color(1.00f, 0.85f, 0.20f), simNorm);
-            _pCtrlDiff.text  = string.Format("AI     {0,5}  {1}", aiSims, Bar(simNorm, 6));
+            _pCtrlDiff.text  = string.Format("AI    {0,5}", aiSims);
 
-            // History position — gray when in past, green at latest
+            // History position — gray when reviewing past, green at latest
             bool atLatest = historyIdx == historyTotal;
             _pCtrlHist.color = atLatest ? new Color(0.60f, 1.00f, 0.60f)
                                         : new Color(1.00f, 0.75f, 0.30f);
-            string arrows = atLatest ? "[<- now]" : "[<-rev->]";
-            _pCtrlHist.text = string.Format("Move    {0,3}/{1,-3} {2}",
-                                             historyIdx, historyTotal, arrows);
+            _pCtrlHist.text  = string.Format("Move  {0,3}/{1,-3}", historyIdx, historyTotal);
         }
 
         // =================================================================

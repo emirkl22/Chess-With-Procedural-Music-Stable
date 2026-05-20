@@ -1,17 +1,22 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace Chess
 {
     // -----------------------------------------------------------------------
     // GameManager – single entry point for the scene.
     //
-    // Keys (handled in Update):
-    //   <- / ->     Navigate move history (review mode)
+    // Adjustable at runtime (Inspector sliders, on-screen buttons, OR keys):
+    //   * animationSeconds — piece-move animation duration
+    //   * mctsSimulations  — AI difficulty (more sims = stronger but slower)
+    //
+    // Keys (new Input System):
+    //   <- / ->     Navigate move history
     //   [   /  ]    Slower / faster piece animation
-    //   ,   /  .    Lower / higher AI difficulty (MCTS simulations)
-    //    R          Reset to current latest position
+    //   ,   /  .    Lower / higher AI difficulty
+    //    R          Jump back to the latest played position
     // -----------------------------------------------------------------------
     public class GameManager : MonoBehaviour
     {
@@ -19,11 +24,17 @@ namespace Chess
         [Header("Assets")]
         [SerializeField] PieceDatabase pieceDatabase;
 
-        [Header("AI Settings")]
+        [Header("AI Settings — also adjustable in-game via UI buttons / , . keys")]
+        [Range(100, 5000)]
         [SerializeField] int mctsSimulations = 1500;
 
-        [Header("Animation")]
+        [Header("Animation — also adjustable in-game via UI buttons / [ ] keys")]
+        [Range(0.05f, 1.50f)]
         [SerializeField] float animationSeconds = 0.30f;
+
+        // Used to detect Inspector edits at runtime and propagate them
+        int   _lastSyncedSims;
+        float _lastSyncedAnim;
 
         // ---- State machine ----
         enum GamePhase { WaitingForInput, PieceSelected, AIThinking, GameOver, Reviewing }
@@ -74,33 +85,62 @@ namespace Chess
             _ui.SetTurn(PieceColor.White);
             RefreshMetricsPanel();
             _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyMoves.Count);
+
+            // Wire UI button callbacks → adjustment methods
+            _ui.OnAnimSlower     = () => AdjustAnimSpeed(+0.05f);
+            _ui.OnAnimFaster     = () => AdjustAnimSpeed(-0.05f);
+            _ui.OnSimsDown       = () => AdjustSims(-100);
+            _ui.OnSimsUp         = () => AdjustSims(+100);
+            _ui.OnHistoryBack    = () => NavigateHistory(-1);
+            _ui.OnHistoryForward = () => NavigateHistory(+1);
+            _ui.OnReset          = () => ResetToLatest();
+
+            _lastSyncedSims = mctsSimulations;
+            _lastSyncedAnim = animationSeconds;
         }
 
         // -----------------------------------------------------------------------
-        // Keyboard shortcuts: navigation + adjustments
+        // Keyboard shortcuts (new Input System) + Inspector-edit sync
         // -----------------------------------------------------------------------
         void Update()
         {
-            if (Input.GetKeyDown(KeyCode.LeftArrow))         NavigateHistory(-1);
-            else if (Input.GetKeyDown(KeyCode.RightArrow))   NavigateHistory(+1);
-            else if (Input.GetKeyDown(KeyCode.LeftBracket))  AdjustAnimSpeed(+0.05f);
-            else if (Input.GetKeyDown(KeyCode.RightBracket)) AdjustAnimSpeed(-0.05f);
-            else if (Input.GetKeyDown(KeyCode.Comma))        AdjustSims(-100);
-            else if (Input.GetKeyDown(KeyCode.Period))       AdjustSims(+100);
-            else if (Input.GetKeyDown(KeyCode.R))            ResetToLatest();
+            // 1. Inspector → runtime sync.  If the user drags the slider in the
+            //    Inspector during Play mode, push the change into MCTS + UI.
+            if (mctsSimulations != _lastSyncedSims || !Mathf.Approximately(animationSeconds, _lastSyncedAnim))
+            {
+                if (_mcts != null) _mcts.SimulationsPerMove = mctsSimulations;
+                _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
+                _lastSyncedSims = mctsSimulations;
+                _lastSyncedAnim = animationSeconds;
+            }
+
+            // 2. Keyboard shortcuts (new Input System — works whether the
+            //    project uses Input System Only or Both input back-ends).
+            var kb = Keyboard.current;
+            if (kb == null) return;
+
+            if      (kb.leftArrowKey   .wasPressedThisFrame) NavigateHistory(-1);
+            else if (kb.rightArrowKey  .wasPressedThisFrame) NavigateHistory(+1);
+            else if (kb.leftBracketKey .wasPressedThisFrame) AdjustAnimSpeed(+0.05f);
+            else if (kb.rightBracketKey.wasPressedThisFrame) AdjustAnimSpeed(-0.05f);
+            else if (kb.commaKey       .wasPressedThisFrame) AdjustSims(-100);
+            else if (kb.periodKey      .wasPressedThisFrame) AdjustSims(+100);
+            else if (kb.rKey           .wasPressedThisFrame) ResetToLatest();
         }
 
         void AdjustAnimSpeed(float delta)
         {
             animationSeconds = Mathf.Clamp(animationSeconds + delta, 0.05f, 1.50f);
-            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyMoves.Count);
+            _lastSyncedAnim  = animationSeconds;
+            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
         }
 
         void AdjustSims(int delta)
         {
-            mctsSimulations = Mathf.Clamp(mctsSimulations + delta, 100, 5000);
+            mctsSimulations  = Mathf.Clamp(mctsSimulations + delta, 100, 5000);
+            _lastSyncedSims  = mctsSimulations;
             if (_mcts != null) _mcts.SimulationsPerMove = mctsSimulations;
-            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyMoves.Count);
+            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyStates.Count);
         }
 
         // -----------------------------------------------------------------------

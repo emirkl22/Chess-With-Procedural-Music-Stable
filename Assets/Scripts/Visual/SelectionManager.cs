@@ -28,12 +28,17 @@ namespace Chess
             float depth = Mathf.Abs(_cam.transform.position.z);
             Vector3 world = _cam.ScreenToWorldPoint(new Vector3(screenPos.x, screenPos.y, depth));
 
-            Debug.Log($"[Click] screen={screenPos}  world=({world.x:F2},{world.y:F2})");
+            // 1. UI buttons (control panel) take priority over board clicks
+            var hit = Physics2D.OverlapPoint(new Vector2(world.x, world.y));
+            if (hit != null)
+            {
+                var btn = hit.GetComponent<UIButton>();
+                if (btn != null) { btn.OnClick(); return; }
+            }
 
+            // 2. Board click — forward to GameManager
             if (BoardRenderer.WorldToBoard(world, out int row, out int col))
                 _gm.OnSquareClicked(row, col);
-            else
-                Debug.Log("[Click] Board dışına tıklandı.");
         }
     }
 }
