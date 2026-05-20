@@ -139,6 +139,9 @@ namespace Chess
 
         void ExecutePlayerMove(Move move)
         {
+            // Detect capture BEFORE applying the move (destination square holds the victim)
+            int captureValue = GetCaptureValue(move);
+
             _board.ApplyMove(move);
             _lastMove = move; _hasLastMove = true;
             _highlights.Clear();
@@ -146,9 +149,9 @@ namespace Chess
             _pieceVisuals.Refresh(_board);
 
             _plyNumber++;
-            // Notify SC immediately: background re-registers the move and a
-            // neutral marker jingle fires before the AI responds.
-            _audio.OnPlayerMove();
+
+            int materialCp = BoardEvaluator.Evaluate(_board);
+            _audio.OnPlayerMove(materialCp, captureValue);
             RefreshMetricsPanel();
 
             if (CheckGameOver(PieceColor.Black)) return;
@@ -170,6 +173,8 @@ namespace Chess
                     float delta = winRate - _prevWinRate;
                     _prevWinRate = winRate;
 
+                    int captureValue = GetCaptureValue(move);
+
                     _board.ApplyMove(move);
                     _lastMove = move; _hasLastMove = true;
 
@@ -178,9 +183,10 @@ namespace Chess
                     _pieceVisuals.Refresh(_board);
 
                     _ui.SetAIThinking(false);
-                    _audio.OnMovePlayed(winRate, delta, visits); // updates AudioBridge properties first
 
-                    // Update ply counter and refresh the full metrics panel
+                    int materialCp = BoardEvaluator.Evaluate(_board);
+                    _audio.OnMovePlayed(winRate, delta, visits, materialCp, captureValue);
+
                     _plyNumber++;
                     RefreshMetricsPanel();
 
@@ -191,6 +197,30 @@ namespace Chess
                     }
                 })
             );
+        }
+
+        // -----------------------------------------------------------------------
+        // Capture detection
+        // -----------------------------------------------------------------------
+        // Returns the standard piece value of whatever piece this move captures,
+        // or 0 if the move is not a capture.
+        //   Pawn=1, Knight=3, Bishop=3, Rook=5, Queen=9
+        int GetCaptureValue(Move move)
+        {
+            if (move.IsEnPassant) return 1;       // captured pawn
+
+            int victim = _board.Board[move.ToRow, move.ToCol];
+            if (victim == Piece.None) return 0;
+            int type = Piece.GetType(victim);
+            switch (type)
+            {
+                case Piece.Pawn:   return 1;
+                case Piece.Knight: return 3;
+                case Piece.Bishop: return 3;
+                case Piece.Rook:   return 5;
+                case Piece.Queen:  return 9;
+                default:           return 0;
+            }
         }
 
         // -----------------------------------------------------------------------
