@@ -7,13 +7,11 @@ namespace Chess
     // -----------------------------------------------------------------------
     // GameManager – single entry point for the scene.
     //
-    // Setup instructions (Unity Editor):
-    //   1. Create an empty GameObject named "GameManager".
-    //   2. Add this component.
-    //   3. Create a PieceDatabase asset (Assets > Create > Chess > Piece Database)
-    //      and assign the 12 sprites from "Pieces and Boards" folder.
-    //   4. Drag the PieceDatabase asset into the "Piece Database" field.
-    //   5. Hit Play.
+    // Keys (handled in Update):
+    //   <- / ->     Navigate move history (review mode)
+    //   [   /  ]    Slower / faster piece animation
+    //   ,   /  .    Lower / higher AI difficulty (MCTS simulations)
+    //    R          Reset to current latest position
     // -----------------------------------------------------------------------
     public class GameManager : MonoBehaviour
     {
@@ -22,10 +20,13 @@ namespace Chess
         [SerializeField] PieceDatabase pieceDatabase;
 
         [Header("AI Settings")]
-        [SerializeField] int mctsSimulations = 200;
+        [SerializeField] int mctsSimulations = 1500;
+
+        [Header("Animation")]
+        [SerializeField] float animationSeconds = 0.30f;
 
         // ---- State machine ----
-        enum GamePhase { WaitingForInput, PieceSelected, AIThinking, GameOver }
+        enum GamePhase { WaitingForInput, PieceSelected, AIThinking, GameOver, Reviewing }
         GamePhase _phase = GamePhase.WaitingForInput;
 
         // ---- Core ----
@@ -34,6 +35,11 @@ namespace Chess
         int        _selectedRow = -1, _selectedCol = -1;
         Move       _lastMove;
         bool       _hasLastMove;
+
+        // ---- Move history (snapshots AFTER each ply) ---------------------
+        readonly List<BoardState> _historyStates = new List<BoardState>();
+        readonly List<Move>       _historyMoves  = new List<Move>();
+        int _historyIdx = 0;   // 0 = initial position; N = after N moves played
 
         // ---- Audio tracking ----
         float _prevWinRate = 0.5f;
@@ -52,7 +58,6 @@ namespace Chess
         // -----------------------------------------------------------------------
         void Awake()
         {
-            // Board rendering uses absolute world coords — GameManager must be at origin.
             transform.position = Vector3.zero;
             transform.rotation = Quaternion.identity;
 
@@ -67,16 +72,48 @@ namespace Chess
         {
             _pieceVisuals.Refresh(_board);
             _ui.SetTurn(PieceColor.White);
-            RefreshMetricsPanel();   // show neutral defaults before first move
+            RefreshMetricsPanel();
+            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyMoves.Count);
         }
 
         // -----------------------------------------------------------------------
-        // Input callback (called by SelectionManager)
+        // Keyboard shortcuts: navigation + adjustments
+        // -----------------------------------------------------------------------
+        void Update()
+        {
+            if (Input.GetKeyDown(KeyCode.LeftArrow))         NavigateHistory(-1);
+            else if (Input.GetKeyDown(KeyCode.RightArrow))   NavigateHistory(+1);
+            else if (Input.GetKeyDown(KeyCode.LeftBracket))  AdjustAnimSpeed(+0.05f);
+            else if (Input.GetKeyDown(KeyCode.RightBracket)) AdjustAnimSpeed(-0.05f);
+            else if (Input.GetKeyDown(KeyCode.Comma))        AdjustSims(-100);
+            else if (Input.GetKeyDown(KeyCode.Period))       AdjustSims(+100);
+            else if (Input.GetKeyDown(KeyCode.R))            ResetToLatest();
+        }
+
+        void AdjustAnimSpeed(float delta)
+        {
+            animationSeconds = Mathf.Clamp(animationSeconds + delta, 0.05f, 1.50f);
+            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyMoves.Count);
+        }
+
+        void AdjustSims(int delta)
+        {
+            mctsSimulations = Mathf.Clamp(mctsSimulations + delta, 100, 5000);
+            if (_mcts != null) _mcts.SimulationsPerMove = mctsSimulations;
+            _ui.RefreshControls(animationSeconds, mctsSimulations, _historyIdx, _historyMoves.Count);
+        }
+
+        // -----------------------------------------------------------------------
+        // Input callback (from SelectionManager)
         // -----------------------------------------------------------------------
         public void OnSquareClicked(int row, int col)
         {
-            Debug.Log($"[GameManager] Kare tıklandı: row={row} col={col}  phase={_phase}  piece={_board.Board[row, col]}");
             if (_phase == GamePhase.AIThinking || _phase == GamePhase.GameOver) return;
+
+            // If we're browsing history, a click should leap back to the latest
+            // position. The user must explicitly press Right (or press R) to
+            // get out of review mode — clicks alone don't accidentally branch.
+            if (_phase == GamePhase.Reviewing) return;
 
             if (_phase == GamePhase.WaitingForInput)
             {
@@ -84,22 +121,18 @@ namespace Chess
             }
             else if (_phase == GamePhase.PieceSelected)
             {
-                // Check if clicked a valid move target
                 Move? matched = null;
                 foreach (var m in _selectedMoves)
                     if (m.ToRow == row && m.ToCol == col) { matched = m; break; }
 
                 if (matched.HasValue)
                 {
-                    // Auto-promote to queen
                     var move = matched.Value;
                     if (move.IsPromotion) move.PromotionPiece = Piece.Queen;
-
-                    ExecutePlayerMove(move);
+                    StartCoroutine(ExecutePlayerMoveCo(move));
                 }
                 else
                 {
-                    // Clicked elsewhere — try to select a different piece
                     _highlights.Clear();
                     _phase = GamePhase.WaitingForInput;
                     TrySelectPiece(row, col);
@@ -113,18 +146,9 @@ namespace Chess
         void TrySelectPiece(int row, int col)
         {
             int piece = _board.Board[row, col];
-            if (piece == Piece.None)
-            {
-                Debug.Log($"[TrySelect] row={row} col={col} → boş kare, seçilecek taş yok.");
-                return;
-            }
-            if (Piece.GetColor(piece) != PieceColor.White)
-            {
-                Debug.Log($"[TrySelect] row={row} col={col} → siyah taş ({piece}), sadece beyaz taşlar seçilebilir.");
-                return;
-            }
+            if (piece == Piece.None) return;
+            if (Piece.GetColor(piece) != PieceColor.White) return;
 
-            // Compute legal moves for this piece
             _selectedMoves.Clear();
             var all = MoveGenerator.GetLegalMoves(_board);
             foreach (var m in all)
@@ -137,29 +161,34 @@ namespace Chess
             _phase = GamePhase.PieceSelected;
         }
 
-        void ExecutePlayerMove(Move move)
+        IEnumerator ExecutePlayerMoveCo(Move move)
         {
-            // Detect capture BEFORE applying the move (destination square holds the victim)
-            int captureValue = GetCaptureValue(move);
+            _phase = GamePhase.AIThinking;   // block clicks during animation
+
+            int        captureValue = GetCaptureValue(move);
+            PieceColor mover        = _board.CurrentTurn;
 
             _board.ApplyMove(move);
             _lastMove = move; _hasLastMove = true;
             _highlights.Clear();
+
+            yield return StartCoroutine(
+                _pieceVisuals.AnimateMove(move, _board, mover, animationSeconds));
+
             _highlights.ShowLastMove(move);
-            _pieceVisuals.Refresh(_board);
 
             _plyNumber++;
+            PushHistory(move, _board);
 
             int materialCp = BoardEvaluator.Evaluate(_board);
             _audio.OnPlayerMove(materialCp, captureValue);
-            RefreshMetricsPanel();
+            RefreshAll();
 
-            if (CheckGameOver(PieceColor.Black)) return;
+            if (CheckGameOver(PieceColor.Black)) yield break;
 
-            _phase = GamePhase.AIThinking;
             _ui.SetTurn(PieceColor.Black);
             _ui.SetAIThinking(true);
-            StartCoroutine(RunAI());
+            yield return StartCoroutine(RunAI());
         }
 
         // -----------------------------------------------------------------------
@@ -167,48 +196,116 @@ namespace Chess
         // -----------------------------------------------------------------------
         IEnumerator RunAI()
         {
+            Move? captured = null;
+            float capturedWR = 0f;
+            int   capturedV  = 0;
+
             yield return StartCoroutine(
                 _mcts.FindBestMove(_board, (move, winRate, visits) =>
                 {
-                    float delta = winRate - _prevWinRate;
-                    _prevWinRate = winRate;
-
-                    int captureValue = GetCaptureValue(move);
-
-                    _board.ApplyMove(move);
-                    _lastMove = move; _hasLastMove = true;
-
-                    _highlights.Clear();
-                    _highlights.ShowLastMove(move);
-                    _pieceVisuals.Refresh(_board);
-
-                    _ui.SetAIThinking(false);
-
-                    int materialCp = BoardEvaluator.Evaluate(_board);
-                    _audio.OnMovePlayed(winRate, delta, visits, materialCp, captureValue);
-
-                    _plyNumber++;
-                    RefreshMetricsPanel();
-
-                    if (!CheckGameOver(PieceColor.White))
-                    {
-                        _phase = GamePhase.WaitingForInput;
-                        _ui.SetTurn(PieceColor.White);
-                    }
+                    captured   = move;
+                    capturedWR = winRate;
+                    capturedV  = visits;
                 })
             );
+
+            if (!captured.HasValue) yield break;
+            Move m = captured.Value;
+
+            float delta = capturedWR - _prevWinRate;
+            _prevWinRate = capturedWR;
+
+            int        captureValue = GetCaptureValue(m);
+            PieceColor mover        = _board.CurrentTurn;
+
+            _board.ApplyMove(m);
+            _lastMove = m; _hasLastMove = true;
+            _highlights.Clear();
+
+            yield return StartCoroutine(
+                _pieceVisuals.AnimateMove(m, _board, mover, animationSeconds));
+
+            _highlights.ShowLastMove(m);
+            _ui.SetAIThinking(false);
+
+            int materialCp = BoardEvaluator.Evaluate(_board);
+            _audio.OnMovePlayed(capturedWR, delta, capturedV, materialCp, captureValue);
+
+            _plyNumber++;
+            PushHistory(m, _board);
+            RefreshAll();
+
+            if (!CheckGameOver(PieceColor.White))
+            {
+                _phase = GamePhase.WaitingForInput;
+                _ui.SetTurn(PieceColor.White);
+            }
         }
 
         // -----------------------------------------------------------------------
-        // Capture detection
+        // History management
         // -----------------------------------------------------------------------
-        // Returns the standard piece value of whatever piece this move captures,
-        // or 0 if the move is not a capture.
-        //   Pawn=1, Knight=3, Bishop=3, Rook=5, Queen=9
+        void PushHistory(Move m, BoardState postState)
+        {
+            // If we've navigated backward and then played a new move, the
+            // forward history is discarded (standard chess-review branching).
+            if (_historyIdx < _historyStates.Count)
+            {
+                _historyStates.RemoveRange(_historyIdx, _historyStates.Count - _historyIdx);
+                _historyMoves .RemoveRange(_historyIdx, _historyMoves .Count - _historyIdx);
+            }
+            _historyStates.Add(new BoardState(postState));
+            _historyMoves .Add(m);
+            _historyIdx = _historyStates.Count;
+        }
+
+        void NavigateHistory(int direction)
+        {
+            if (_phase == GamePhase.AIThinking) return;
+
+            int newIdx = Mathf.Clamp(_historyIdx + direction, 0, _historyStates.Count);
+            if (newIdx == _historyIdx) return;
+            _historyIdx = newIdx;
+
+            // Restore board state
+            _board = newIdx == 0
+                   ? new BoardState()
+                   : new BoardState(_historyStates[newIdx - 1]);
+
+            _pieceVisuals.Refresh(_board);
+            _highlights.Clear();
+            if (newIdx > 0) _highlights.ShowLastMove(_historyMoves[newIdx - 1]);
+
+            if (newIdx == _historyStates.Count)
+            {
+                _phase = _phase == GamePhase.GameOver ? GamePhase.GameOver
+                                                      : GamePhase.WaitingForInput;
+            }
+            else
+            {
+                _phase = GamePhase.Reviewing;
+            }
+
+            // Send material to SC so background follows reviewed position
+            int matCp = BoardEvaluator.Evaluate(_board);
+            _audio.SendMaterialOnly(matCp);
+
+            RefreshAll();
+        }
+
+        void ResetToLatest()
+        {
+            if (_historyIdx == _historyStates.Count) return;
+            NavigateHistory(_historyStates.Count - _historyIdx);
+        }
+
+        // -----------------------------------------------------------------------
+        // Capture value lookup (standard piece values)
+        //   Pawn=1, Knight=3, Bishop=3, Rook=5, Queen=10
+        // -----------------------------------------------------------------------
         int GetCaptureValue(Move move)
         {
-            if (move.IsEnPassant) return 1;       // captured pawn
-
+            if (move.IsEnPassant) return 1;
             int victim = _board.Board[move.ToRow, move.ToCol];
             if (victim == Piece.None) return 0;
             int type = Piece.GetType(victim);
@@ -218,7 +315,7 @@ namespace Chess
                 case Piece.Knight: return 3;
                 case Piece.Bishop: return 3;
                 case Piece.Rook:   return 5;
-                case Piece.Queen:  return 9;
+                case Piece.Queen:  return 10;
                 default:           return 0;
             }
         }
@@ -239,11 +336,10 @@ namespace Chess
             }
             else
             {
-                result = "Stalemate – Draw!";
+                result = "Stalemate - Draw!";
             }
 
             _ui.SetGameOver(result);
-            Debug.Log($"[GameManager] Game over: {result}");
             _phase = GamePhase.GameOver;
             return true;
         }
@@ -255,10 +351,10 @@ namespace Chess
         {
             var cam = Camera.main;
             if (cam == null) return;
-            cam.orthographic     = true;
-            cam.orthographicSize = 5.5f;
+            cam.orthographic       = true;
+            cam.orthographicSize   = 5.5f;
             cam.transform.position = new Vector3(4f, 4.5f, -10f);
-            cam.backgroundColor  = new Color(0.12f, 0.12f, 0.14f);
+            cam.backgroundColor    = new Color(0.12f, 0.12f, 0.14f);
         }
 
         void SetupBoard()
@@ -290,29 +386,27 @@ namespace Chess
         {
             var cam = Camera.main;
             if (cam == null)
-                Debug.LogError("[GameManager] Camera.main bulunamadı! Sahnede 'MainCamera' tag'li bir kamera olduğundan emin ol.");
+                Debug.LogError("[GameManager] Camera.main bulunamadi.");
 
-            // SelectionManager artık GameManager'ın kendi GO'sunda, kamera referansını parametre olarak alıyor
             var sel = gameObject.AddComponent<SelectionManager>();
             sel.Init(this, cam);
 
-            // MCTS agent
             _mcts = gameObject.AddComponent<MCTSAgent>();
             _mcts.SimulationsPerMove = mctsSimulations;
 
-            // Audio bridge
             _audio = gameObject.AddComponent<AudioBridge>();
         }
 
         // -----------------------------------------------------------------------
-        // Metrics panel helpers
+        // Metrics + controls refresh
         // -----------------------------------------------------------------------
+        void RefreshAll()
+        {
+            RefreshMetricsPanel();
+            _ui.RefreshControls(animationSeconds, mctsSimulations,
+                                _historyIdx, _historyStates.Count);
+        }
 
-        /// <summary>
-        /// Gather board + audio metrics and push them to UIManager.RefreshMetrics().
-        /// Safe to call at any time; AudioBridge properties default to neutral values
-        /// before the first AI move.
-        /// </summary>
         void RefreshMetricsPanel()
         {
             int  mat     = BoardEvaluator.Evaluate(_board);
@@ -333,12 +427,6 @@ namespace Chess
                 _mcts != null ? _mcts.LastVisitCount : 0);
         }
 
-        /// <summary>
-        /// Heuristic game-phase label used by the metrics panel and music engine.
-        ///   OPENING  : fewer than 10 half-moves played AND 28+ pieces remain
-        ///   ENDGAME  : no queens on the board OR 14 or fewer pieces remain
-        ///   MIDGAME  : everything else
-        /// </summary>
         string ComputePhase()
         {
             int  pieces    = 0;

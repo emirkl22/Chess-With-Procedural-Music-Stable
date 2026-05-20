@@ -32,6 +32,13 @@ namespace Chess
         TextMesh _pCheck;       // "Check    ok"  OR  "Check    (!)"
         TextMesh _pPly;         // "Ply      #12"
 
+        // ---- Controls panel (bottom right) -------------------------------
+        TextMesh _pSecCtrl;     // "-- CONTROLS --"
+        TextMesh _pCtrlAnim;    // "Anim speed  0.30s    [   ]"
+        TextMesh _pCtrlDiff;    // "AI sims     1500     , ."
+        TextMesh _pCtrlHist;    // "Move        #12/12   < >"
+        TextMesh _pCtrlHelp;    // "Keys: <- -> [ ] , . R"
+
         // Panel left-edge x  (board tiles occupy x in [−0.5 , 7.5])
         const float PX    = 9.8f;
         const float SCALE = 0.082f;
@@ -51,28 +58,38 @@ namespace Chess
 
             float y = 8.25f;
             _pTitle    = PRow("PTitle",    ref y, 0.00f, 16, accent);
-            _pSecBg    = PRow("PSecBg",    ref y, 0.44f, 12, gray);
-            _pQ        = PRow("PQ",        ref y, 0.37f, 14, Color.white);
-            _pC        = PRow("PC",        ref y, 0.40f, 14, Color.white);
-            _pHarmony  = PRow("PHarmony",  ref y, 0.40f, 14, Color.white);
-            _pSecMove  = PRow("PSecMove",  ref y, 0.48f, 12, gray);
-            _pDQ       = PRow("PDQ",       ref y, 0.37f, 14, Color.white);
-            _pSecState = PRow("PSecState", ref y, 0.48f, 12, gray);
-            _pMaterial = PRow("PMaterial", ref y, 0.37f, 14, Color.white);
-            _pPhase    = PRow("PPhase",    ref y, 0.40f, 14, Color.white);
-            _pLegal    = PRow("PLegal",    ref y, 0.40f, 14, Color.white);
-            _pSims     = PRow("PSims",     ref y, 0.40f, 14, Color.white);
-            _pCheck    = PRow("PCheck",    ref y, 0.40f, 14, Color.white);
-            _pPly      = PRow("PPly",      ref y, 0.40f, 14, Color.white);
+            _pSecBg    = PRow("PSecBg",    ref y, 0.40f, 12, gray);
+            _pQ        = PRow("PQ",        ref y, 0.34f, 14, Color.white);
+            _pC        = PRow("PC",        ref y, 0.37f, 14, Color.white);
+            _pHarmony  = PRow("PHarmony",  ref y, 0.37f, 14, Color.white);
+            _pSecMove  = PRow("PSecMove",  ref y, 0.44f, 12, gray);
+            _pDQ       = PRow("PDQ",       ref y, 0.34f, 14, Color.white);
+            _pSecState = PRow("PSecState", ref y, 0.44f, 12, gray);
+            _pMaterial = PRow("PMaterial", ref y, 0.34f, 14, Color.white);
+            _pPhase    = PRow("PPhase",    ref y, 0.37f, 14, Color.white);
+            _pLegal    = PRow("PLegal",    ref y, 0.37f, 14, Color.white);
+            _pSims     = PRow("PSims",     ref y, 0.37f, 14, Color.white);
+            _pCheck    = PRow("PCheck",    ref y, 0.37f, 14, Color.white);
+            _pPly      = PRow("PPly",      ref y, 0.37f, 14, Color.white);
+
+            // Controls panel
+            _pSecCtrl  = PRow("PSecCtrl",  ref y, 0.46f, 12, gray);
+            _pCtrlAnim = PRow("PCtrlAnim", ref y, 0.34f, 13, new Color(0.80f, 0.92f, 1f));
+            _pCtrlDiff = PRow("PCtrlDiff", ref y, 0.36f, 13, new Color(0.80f, 0.92f, 1f));
+            _pCtrlHist = PRow("PCtrlHist", ref y, 0.36f, 13, new Color(0.80f, 0.92f, 1f));
+            _pCtrlHelp = PRow("PCtrlHelp", ref y, 0.42f, 10, gray);
 
             // Static header strings
             _pTitle.text    = "[ AUDIO ENGINE ]";
             _pSecBg.text    = "-- BACKGROUND MUSIC --";
             _pSecMove.text  = "-- LAST MOVE --";
             _pSecState.text = "-- BOARD STATE --";
+            _pSecCtrl.text  = "-- CONTROLS --";
+            _pCtrlHelp.text = "<- -> nav   [ ] anim   , . AI   R reset";
 
             // Neutral initial values (shown before first AI move)
             RefreshMetrics(0.5f, 0f, 0f, "Neutral", "neutral", 0, 20, false, 0, "OPENING", 0);
+            RefreshControls(0.30f, 1500, 0, 0);
         }
 
         // Creates a row at the current y, then decrements y by stepDown.
@@ -180,6 +197,38 @@ namespace Chess
             // -- Ply counter -----------------------------------------------
             _pPly.color = new Color(0.50f, 0.50f, 0.50f);
             _pPly.text  = "Ply      #" + plyNumber;
+        }
+
+        /// <summary>
+        /// Refresh the controls panel (animation speed, AI difficulty, history pos).
+        ///
+        /// animSeconds     -- piece-animation duration in seconds (0.05 .. 1.0)
+        /// aiSims          -- MCTS simulations per AI move
+        /// historyIdx      -- current position in move history (0 = start)
+        /// historyTotal    -- total moves played so far
+        /// </summary>
+        public void RefreshControls(float animSeconds, int aiSims,
+                                    int historyIdx, int historyTotal)
+        {
+            // Animation speed — green for fast, red for slow
+            float animNorm = Mathf.InverseLerp(0.05f, 1.0f, animSeconds);
+            _pCtrlAnim.color = Color.Lerp(new Color(0.30f, 1.00f, 0.40f),
+                                          new Color(1.00f, 0.55f, 0.20f), animNorm);
+            _pCtrlAnim.text  = string.Format("Anim   {0:F2}s  {1}", animSeconds, Bar(1f - animNorm, 6));
+
+            // AI difficulty (sims) — blue for low, gold for high
+            float simNorm = Mathf.InverseLerp(100f, 3000f, aiSims);
+            _pCtrlDiff.color = Color.Lerp(new Color(0.55f, 0.80f, 1.00f),
+                                          new Color(1.00f, 0.85f, 0.20f), simNorm);
+            _pCtrlDiff.text  = string.Format("AI     {0,5}  {1}", aiSims, Bar(simNorm, 6));
+
+            // History position — gray when in past, green at latest
+            bool atLatest = historyIdx == historyTotal;
+            _pCtrlHist.color = atLatest ? new Color(0.60f, 1.00f, 0.60f)
+                                        : new Color(1.00f, 0.75f, 0.30f);
+            string arrows = atLatest ? "[<- now]" : "[<-rev->]";
+            _pCtrlHist.text = string.Format("Move    {0,3}/{1,-3} {2}",
+                                             historyIdx, historyTotal, arrows);
         }
 
         // =================================================================

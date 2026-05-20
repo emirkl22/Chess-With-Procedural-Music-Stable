@@ -66,9 +66,10 @@ namespace Chess
 
             // Big captures override / boost the jingle intensity even if MCTS
             // win-rate barely shifted (e.g. capturing a hanging queen).
-            if (captureValue >= 3) intensity = Mathf.Max(intensity, 0.55f);
-            if (captureValue >= 5) intensity = Mathf.Max(intensity, 0.80f);
-            if (captureValue >= 8) intensity = 1.0f;
+            // Standard piece values: P=1, N/B=3, R=5, Q=10
+            if (captureValue >= 3)  intensity = Mathf.Max(intensity, 0.45f);
+            if (captureValue >= 5)  intensity = Mathf.Max(intensity, 0.70f);
+            if (captureValue >= 10) intensity = 1.0f;
 
             // Capture forces positive/negative direction if MCTS didn't decide.
             if (direction == 0f && captureValue > 0) direction = +1f;
@@ -97,9 +98,9 @@ namespace Chess
             float intensity, direction;
             if (captureValue > 0)
             {
-                intensity = Mathf.Clamp01(captureValue / 9f * 1.1f);
-                if (captureValue >= 5) intensity = Mathf.Max(intensity, 0.80f);
-                if (captureValue >= 8) intensity = 1.0f;
+                intensity = Mathf.Clamp01(captureValue / 10f * 1.1f);
+                if (captureValue >= 5)  intensity = Mathf.Max(intensity, 0.75f);
+                if (captureValue >= 10) intensity = 1.0f;
                 direction = +1f;   // a capture is good for the player
             }
             else
@@ -143,6 +144,16 @@ namespace Chess
             LastC    = c;
             Harmony  = harmony;
             Jingle   = jingleLabel;
+        }
+
+        // -------------------------------------------------------------------
+        // Called during history navigation — updates SC's bass-note pitch
+        // (via /chess/material) without firing a jingle.
+        // -------------------------------------------------------------------
+        public void SendMaterialOnly(int materialCp)
+        {
+            float material = materialCp / 100f;
+            OSCSender.Send("/chess/material", material);
         }
 
         // ── Legacy helpers retained for UI/metrics code ────────────────────
